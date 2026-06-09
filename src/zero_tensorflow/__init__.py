@@ -8,7 +8,10 @@ from ml_switcheroo_ir import LogicalNode
 
 from . import data
 from . import nn
-from . import keras
+import sys
+import zero_keras as keras
+
+sys.modules["zero_tensorflow.keras"] = keras
 
 __all__ = [
     "Variable",

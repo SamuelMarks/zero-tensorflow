@@ -186,3 +186,21 @@ def test_math_traced():
     b = Tensor(np.eye(2))
     res = math_f(x, y, a, b)
     assert all(isinstance(r, Tensor) for r in res)
+
+
+def test_numpy_on_traced_tensor():
+    import pytest
+    from zero_tensorflow import Tensor
+    from ml_switcheroo_ir import LogicalNode
+
+    node = LogicalNode(id="test", op_type="Input")
+    t = Tensor(None, _traced_node=node)
+    with pytest.raises(ValueError, match="Cannot call numpy"):
+        t.numpy()
+
+
+def test_shape_property():
+    from zero_tensorflow import Tensor
+
+    t = Tensor(1.0)
+    assert t.shape == ()

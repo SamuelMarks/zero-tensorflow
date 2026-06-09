@@ -35,7 +35,7 @@ def generate_layers():
         f.write("\n".join(out))
 
     # Also generate tests
-    test_out = ["import pytest", "from zero_tensorflow.keras import layers", ""]
+    test_out = ["import pytest", "from zero_keras import layers", ""]
     for name in layer_names:
         test_out.append(f"def test_{name.lower()}():")
         test_out.append(f"    layer = layers.{name}()")
