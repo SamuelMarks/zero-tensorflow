@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zero-tensorflow"
+version = "2.20.0"
+description = "Zero-dependency pure Python implementation of the TensorFlow API surface."
+authors = [{ name = "Samuel Marks" }]
+requires-python = ">=3.10"
+dependencies = ["numpy", "ml-switcheroo-compiler"]
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-cov"]
