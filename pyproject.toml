@@ -23,3 +23,6 @@ dependencies = ["ml-switcheroo-compiler"]
 
 [tool.ruff]
 ignore = ['E402']
+
+[tool.mypy]
+ignore_missing_imports = true

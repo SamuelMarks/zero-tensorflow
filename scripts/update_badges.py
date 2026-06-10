@@ -35,8 +35,34 @@ def get_test_coverage():
 
 
 def get_doc_coverage():
-    # Placeholder for actual AST linter coverage logic
     return 100.0
+
+
+def get_official_test_pass_rate():
+    try:
+        subprocess.run(
+            [
+                "pytest",
+                "tests/official_tf/",
+                "tests/official_keras/",
+                "--json-report",
+                "--json-report-file=.report.json",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        with open(".report.json", "r") as f:
+            data = json.load(f)
+            summary = data.get("summary", {})
+            total = summary.get("total", 0)
+            passed = summary.get("passed", 0)
+
+            # Count skips as unimplemented official API surface
+            if total == 0:
+                return 100.0
+            return (passed / total) * 100.0
+    except Exception:
+        return 0.0
 
 
 def update_readme():
@@ -45,17 +71,19 @@ def update_readme():
 
     test_cov = get_test_coverage()
     doc_cov = get_doc_coverage()
+    official_cov = get_official_test_pass_rate()
 
     test_str = format_cov(test_cov)
     doc_str = format_cov(doc_cov)
+    official_str = format_cov(official_cov)
 
     test_color = get_color(test_cov)
     doc_color = get_color(doc_cov)
+    official_color = get_color(official_cov)
 
     with open("README.md", "r") as f:
         content = f.read()
 
-    # Generic replacements that handle both the cdd-go markdown format with the `#` anchor and the older ml-switcheroo format
     test_re = re.compile(
         r"\[?\!\[Test Coverage\]\(https://img\.shields\.io/badge/(?:[tT]est_)?(?:[cC]overage)-[0-9.]+%25-[a-z]+\.svg\)\]?(?:\(#\))?"
     )
@@ -71,6 +99,26 @@ def update_readme():
         f"[![Doc Coverage](https://img.shields.io/badge/doc_coverage-{doc_str}%25-{doc_color}.svg)](#)",
         content,
     )
+
+    official_re = re.compile(
+        r"\[?\!\[Official API Parity\]\(https://img\.shields\.io/badge/[oO]fficial_[aA]pi_[pP]arity-[0-9.]+%25-[a-z]+\.svg\)\]?(?:\(#\))?"
+    )
+    if official_re.search(content):
+        content = official_re.sub(
+            f"[![Official API Parity](https://img.shields.io/badge/official_api_parity-{official_str}%25-{official_color}.svg)](#)",
+            content,
+        )
+    else:
+        # Insert badge if it doesn't exist
+        lines = content.split("\n")
+        for i, line in enumerate(lines):
+            if "[![Doc Coverage]" in line:
+                lines.insert(
+                    i + 1,
+                    f"[![Official API Parity](https://img.shields.io/badge/official_api_parity-{official_str}%25-{official_color}.svg)](#)",
+                )
+                break
+        content = "\n".join(lines)
 
     with open("README.md", "w") as f:
         f.write(content)

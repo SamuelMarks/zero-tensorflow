@@ -15,9 +15,16 @@ repos:
         types: [python]
         pass_filenames: false
 
+      - id: mypy
+        name: Mypy
+        entry: mypy src
+        language: system
+        types: [python]
+        pass_filenames: false
+
       - id: pytest-coverage
         name: Run Pytest Coverage
-        entry: env PYTHONPATH=src pytest --cov=src --cov-report=term-missing
+        entry: env PYTHONPATH=src pytest --cov=src --cov-branch --cov-report=term-missing
         language: system
         types: [python]
         pass_filenames: false

@@ -3,3 +3,4 @@ pytest-cov
 absl-py
 parameterized
 mock
+pytest-json-report

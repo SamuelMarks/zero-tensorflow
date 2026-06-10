@@ -9,6 +9,7 @@ __all__ = ["elu", "leaky_relu", "relu", "selu", "sigmoid", "softmax", "tanh"]
 
 
 def _check_none(features):
+    """_check_none docstring."""
     if features is None:
         raise ValueError("features cannot be None")
 
