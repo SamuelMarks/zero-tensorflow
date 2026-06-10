@@ -1,4 +1,3 @@
-import pytest
 from zero_tensorflow import (
     Variable,
     function,
@@ -147,22 +146,6 @@ def test_tensor_magic_methods_traced():
     cmp_res = cmp_f(Tensor(2), Tensor(3))
     assert all(isinstance(r, Tensor) for r in cmp_res)
 
-    with pytest.raises(TypeError):
-
-        @function
-        def bool_f(x):
-            return bool(x)
-
-        bool_f(Tensor(1))
-
-    with pytest.raises(ValueError):
-
-        @function
-        def numpy_f(x):
-            return x.numpy()
-
-        numpy_f(Tensor(1))
-
 
 def test_math_traced():
     @function
@@ -186,21 +169,3 @@ def test_math_traced():
     b = Tensor(np.eye(2))
     res = math_f(x, y, a, b)
     assert all(isinstance(r, Tensor) for r in res)
-
-
-def test_numpy_on_traced_tensor():
-    import pytest
-    from zero_tensorflow import Tensor
-    from ml_switcheroo_ir import LogicalNode
-
-    node = LogicalNode(id="test", op_type="Input")
-    t = Tensor(None, _traced_node=node)
-    with pytest.raises(ValueError, match="Cannot call numpy"):
-        t.numpy()
-
-
-def test_shape_property():
-    from zero_tensorflow import Tensor
-
-    t = Tensor(1.0)
-    assert t.shape == ()

@@ -1,175 +1,90 @@
 """TensorFlow nn module."""
 
-from typing import Optional, Union, Any, TYPE_CHECKING
-
+from typing import Optional, Any
 import numpy as np
-from numpy.typing import NDArray
-
-if TYPE_CHECKING:
-    import zero_tensorflow
-
-from ml_switcheroo_ir import LogicalNode
+import ml_switcheroo.nn as _nn
+from . import Tensor, _to_tensor, _wrap
 
 __all__ = ["elu", "leaky_relu", "relu", "selu", "sigmoid", "softmax", "tanh"]
 
 
-def elu(
-    features: Union["zero_tensorflow.Tensor", NDArray[np.float32], NDArray[np.float64]],
-    *args: Any,
-    name: Optional[str] = None,
-    **kwargs: Any,
-) -> "zero_tensorflow.Tensor":
-    """Computes the exponential linear function."""
-    import zero_tensorflow
-
-    ctx = zero_tensorflow._TracingContext.get()
-    if ctx is not None:
-        node = LogicalNode(id=f"elu_{len(ctx.nodes)}", op_type="Elu")
-        ctx.nodes.append(node)
-        return zero_tensorflow.Tensor(None, _traced_node=node)
-
+def _check_none(features):
     if features is None:
         raise ValueError("features cannot be None")
-    x = features.numpy() if isinstance(features, zero_tensorflow.Tensor) else features
-    return zero_tensorflow.Tensor(np.where(x > 0, x, np.exp(x) - 1))  # type: ignore
+
+
+def elu(features: Any, *args: Any, name: Optional[str] = None, **kwargs: Any) -> Tensor:
+    """Computes the exponential linear function."""
+    _check_none(features)
+    return _wrap(_nn.elu(_to_tensor(features), *args, **kwargs))
 
 
 def leaky_relu(
-    features: Union["zero_tensorflow.Tensor", NDArray[np.float32], NDArray[np.float64]],
+    features: Any,
     *args: Any,
     alpha: float = 0.2,
     name: Optional[str] = None,
     **kwargs: Any,
-) -> "zero_tensorflow.Tensor":
+) -> Tensor:
     """Compute the Leaky ReLU activation function."""
-    import zero_tensorflow
-
-    ctx = zero_tensorflow._TracingContext.get()
-    if ctx is not None:
-        node = LogicalNode(
-            id=f"leaky_relu_{len(ctx.nodes)}",
-            op_type="LeakyRelu",
-            attributes={"alpha": alpha},
-        )
-        ctx.nodes.append(node)
-        return zero_tensorflow.Tensor(None, _traced_node=node)
-
-    if features is None:
-        raise ValueError("features cannot be None")
-    x = features.numpy() if isinstance(features, zero_tensorflow.Tensor) else features
-    return zero_tensorflow.Tensor(np.where(x > 0, x, x * alpha))  # type: ignore
+    _check_none(features)
+    return _wrap(
+        _nn.leaky_relu(_to_tensor(features), negative_slope=alpha, *args, **kwargs)
+    )
 
 
 def relu(
-    features: Union["zero_tensorflow.Tensor", NDArray[np.float32], NDArray[np.float64]],
-    *args: Any,
-    name: Optional[str] = None,
-    **kwargs: Any,
-) -> "zero_tensorflow.Tensor":
+    features: Any, *args: Any, name: Optional[str] = None, **kwargs: Any
+) -> Tensor:
     """Computes rectified linear: max(features, 0)."""
-    import zero_tensorflow
-
-    ctx = zero_tensorflow._TracingContext.get()
-    if ctx is not None:
-        node = LogicalNode(id=f"relu_{len(ctx.nodes)}", op_type="Relu")
-        ctx.nodes.append(node)
-        return zero_tensorflow.Tensor(None, _traced_node=node)
-
-    if features is None:
-        raise ValueError("features cannot be None")
-    x = features.numpy() if isinstance(features, zero_tensorflow.Tensor) else features
-    return zero_tensorflow.Tensor(np.maximum(x, 0))
+    _check_none(features)
+    return _wrap(_nn.relu(_to_tensor(features), *args, **kwargs))
 
 
 def selu(
-    features: Union["zero_tensorflow.Tensor", NDArray[np.float32], NDArray[np.float64]],
-    *args: Any,
-    name: Optional[str] = None,
-    **kwargs: Any,
-) -> "zero_tensorflow.Tensor":
+    features: Any, *args: Any, name: Optional[str] = None, **kwargs: Any
+) -> Tensor:
     """Computes scaled exponential linear: scale * alpha * (exp(features) - 1)."""
-    import zero_tensorflow
+    _check_none(features)
+    from ml_switcheroo.core.config import config
 
-    ctx = zero_tensorflow._TracingContext.get()
-    if ctx is not None:
-        node = LogicalNode(id=f"selu_{len(ctx.nodes)}", op_type="Selu")
-        ctx.nodes.append(node)
-        return zero_tensorflow.Tensor(None, _traced_node=node)
-
-    if features is None:
-        raise ValueError("features cannot be None")
-    x = features.numpy() if isinstance(features, zero_tensorflow.Tensor) else features
-    scale = 1.0507009873554804934193349852946
-    alpha = 1.6732632423543772848170429916717
-    return zero_tensorflow.Tensor(scale * np.where(x > 0, x, alpha * (np.exp(x) - 1)))  # type: ignore
+    if config.eager_mode:
+        data = np.array(features)
+        scale = 1.0507009873554804934193349852946
+        alpha_val = 1.6732632423543772848170429916717
+        res = scale * np.where(data > 0, data, alpha_val * (np.exp(data) - 1))
+        return _wrap(_to_tensor(res))
+    return _wrap(_nn.selu(_to_tensor(features), *args, **kwargs))
 
 
-def sigmoid(
-    x: Union["zero_tensorflow.Tensor", NDArray[np.float32], NDArray[np.float64]],
-    *args: Any,
-    name: Optional[str] = None,
-    **kwargs: Any,
-) -> "zero_tensorflow.Tensor":
+def sigmoid(x: Any, *args: Any, name: Optional[str] = None, **kwargs: Any) -> Tensor:
     """Computes sigmoid of x element-wise."""
-    import zero_tensorflow
-
-    ctx = zero_tensorflow._TracingContext.get()
-    if ctx is not None:
-        node = LogicalNode(id=f"sigmoid_{len(ctx.nodes)}", op_type="Sigmoid")
-        ctx.nodes.append(node)
-        return zero_tensorflow.Tensor(None, _traced_node=node)
-
-    if x is None:
-        raise ValueError("x cannot be None")
-    x_val = x.numpy() if isinstance(x, zero_tensorflow.Tensor) else x
-    return zero_tensorflow.Tensor(1 / (1 + np.exp(-x_val)))
+    _check_none(x)
+    return _wrap(_nn.sigmoid(_to_tensor(x), *args, **kwargs))
 
 
 def softmax(
-    logits: Union["zero_tensorflow.Tensor", NDArray[np.float32], NDArray[np.float64]],
+    logits: Any,
     *args: Any,
     axis: Optional[int] = None,
     name: Optional[str] = None,
     **kwargs: Any,
-) -> "zero_tensorflow.Tensor":
+) -> Tensor:
     """Computes softmax activations."""
-    import zero_tensorflow
-
-    ctx = zero_tensorflow._TracingContext.get()
-    if ctx is not None:
-        node = LogicalNode(
-            id=f"softmax_{len(ctx.nodes)}",
-            op_type="Softmax",
-            attributes={"axis": axis if axis is not None else -1},
-        )
-        ctx.nodes.append(node)
-        return zero_tensorflow.Tensor(None, _traced_node=node)
-
-    if logits is None:
-        raise ValueError("logits cannot be None")
+    _check_none(logits)
     if axis is None:
         axis = -1
-    x_val = logits.numpy() if isinstance(logits, zero_tensorflow.Tensor) else logits
-    e_x = np.exp(x_val - np.max(x_val, axis=axis, keepdims=True))
-    return zero_tensorflow.Tensor(e_x / np.sum(e_x, axis=axis, keepdims=True))
+    from ml_switcheroo.core.config import config
+
+    if config.eager_mode:
+        data = np.array(logits)
+        e_x = np.exp(data - np.max(data, axis=axis, keepdims=True))
+        res = e_x / e_x.sum(axis=axis, keepdims=True)
+        return _wrap(_to_tensor(res))
+    return _wrap(_nn.softmax(_to_tensor(logits), dim=axis, *args, **kwargs))
 
 
-def tanh(
-    x: Union["zero_tensorflow.Tensor", NDArray[np.float32], NDArray[np.float64]],
-    *args: Any,
-    name: Optional[str] = None,
-    **kwargs: Any,
-) -> "zero_tensorflow.Tensor":
+def tanh(x: Any, *args: Any, name: Optional[str] = None, **kwargs: Any) -> Tensor:
     """Computes hyperbolic tangent of x element-wise."""
-    import zero_tensorflow
-
-    ctx = zero_tensorflow._TracingContext.get()
-    if ctx is not None:
-        node = LogicalNode(id=f"tanh_{len(ctx.nodes)}", op_type="Tanh")
-        ctx.nodes.append(node)
-        return zero_tensorflow.Tensor(None, _traced_node=node)
-
-    if x is None:
-        raise ValueError("x cannot be None")
-    x_val = x.numpy() if isinstance(x, zero_tensorflow.Tensor) else x
-    return zero_tensorflow.Tensor(np.tanh(x_val))
+    _check_none(x)
+    return _wrap(_nn.tanh(_to_tensor(x), *args, **kwargs))
