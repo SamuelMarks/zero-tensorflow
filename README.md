@@ -8,7 +8,7 @@
 [![CI](https://github.com/SamuelMarks/zero-tensorflow/actions/workflows/ci.yml/badge.svg)](https://github.com/SamuelMarks/zero-tensorflow/actions)
 [![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)
 [![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)
-[![Official API Parity](https://img.shields.io/badge/official_api_parity-60%25-orange.svg)](#)
+[![Official API Parity](https://img.shields.io/badge/official_api_parity-65%25-orange.svg)](#)
 
 ## What is zero-tensorflow?
 

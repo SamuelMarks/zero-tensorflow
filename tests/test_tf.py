@@ -58,9 +58,10 @@ def test_gradient_tape():
         y = v.value + 1.0
     grads = tape.gradient(y, [v])
     assert len(grads) == 1
+    assert grads[0].numpy() == 1.0
 
     grads_single = tape.gradient(y, v)
-    assert len(grads_single) == 1
+    assert grads_single.numpy() == 1.0
 
 
 def test_dataset():

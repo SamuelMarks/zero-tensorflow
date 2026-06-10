@@ -29,17 +29,20 @@ def test_tensor_corner_cases():
 
 def test_to_tensor_tracing():
     # Trigger line 31: passing a non-traced ml_switcheroo.Tensor to _to_tensor during tracing
+    from ml_switcheroo.core.config import config
+
+    # Create an eager ml_switcheroo.Tensor
+    t = ml_switcheroo.Tensor(
+        np.array(1.0),
+        shape=(),
+        dtype=config.default_float_dtype,
+        device=config.default_device,
+    )
+    t_wrap = Tensor(t)
+    del t_wrap._traced_node_ids
+
     @function
     def f():
-        from ml_switcheroo.core.config import config
-
-        # Create an eager ml_switcheroo.Tensor
-        t = ml_switcheroo.Tensor(
-            np.array(1.0),
-            shape=(),
-            dtype=config.default_float_dtype,
-            device=config.default_device,
-        )
-        return _to_tensor(t)
+        return _to_tensor(t_wrap)
 
     f()

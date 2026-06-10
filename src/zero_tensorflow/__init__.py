@@ -2,7 +2,7 @@
 
 import functools
 from typing import Any, Optional
-import numpy as np
+from ml_switcheroo.core.tensor_utils import to_array, to_numpy_dtype, ndarray
 import ml_switcheroo
 import ml_switcheroo.ops as _ops
 from ml_switcheroo_ir import LogicalNode
@@ -11,6 +11,8 @@ import zero_keras as keras
 
 sys.modules["zero_tensorflow.keras"] = keras
 
+if not hasattr(keras.layers.Dense, "units"):
+    keras.layers.Dense.units = property(lambda self: self._kwargs.get("units"))
 
 __all__ = [
     "Variable",
@@ -26,7 +28,9 @@ __all__ = [
 
 def _to_tensor(x: Any, dtype: Optional[Any] = None) -> ml_switcheroo.Tensor:
     """_to_tensor docstring."""
+    original_tensor = None
     if isinstance(x, Tensor):
+        original_tensor = x
         x = x._tensor
 
     from ml_switcheroo.tracing import _tracer, ProxyTensor
@@ -35,15 +39,27 @@ def _to_tensor(x: Any, dtype: Optional[Any] = None) -> ml_switcheroo.Tensor:
 
     if isinstance(x, ml_switcheroo.Tensor):
         if _tracer.is_tracing and not hasattr(x.data, "id"):
+            graph_id = id(getattr(_tracer, "active_graph", None))
+            if original_tensor is not None:
+                if not hasattr(original_tensor, "_traced_node_ids"):
+                    original_tensor._traced_node_ids = {}
+                if graph_id in original_tensor._traced_node_ids:
+                    out_id = original_tensor._traced_node_ids[graph_id]
+                    pt = ProxyTensor(id=out_id, shape=x.shape, dtype=x.dtype.value)
+                    return ml_switcheroo.Tensor(
+                        data=pt, shape=x.shape, dtype=x.dtype, device=x.device
+                    )
+
             out_id = str(uuid.uuid4())
             node = LogicalNode(
                 id=out_id,
                 op_type="Constant",
-                attributes={"value": np.array(x.data).tolist()},
+                attributes={"value": to_array(x.data).tolist()},
                 shape_metadata=x.shape,
             )
-            print("GRAPH:", getattr(_tracer, "active_graph", None))
             _tracer.add_node(node)
+            if original_tensor is not None:
+                original_tensor._traced_node_ids[graph_id] = out_id
             pt = ProxyTensor(id=out_id, shape=x.shape, dtype=x.dtype.value)
             return ml_switcheroo.Tensor(
                 data=pt, shape=x.shape, dtype=x.dtype, device=x.device
@@ -65,7 +81,7 @@ def _to_tensor(x: Any, dtype: Optional[Any] = None) -> ml_switcheroo.Tensor:
             device=config.default_device,
         )
 
-    arr = np.array(x)
+    arr = to_array(x)
     if dtype is not None:
         arr = arr.astype(dtype)
 
@@ -98,10 +114,9 @@ def _to_tensor(x: Any, dtype: Optional[Any] = None) -> ml_switcheroo.Tensor:
         node = LogicalNode(
             id=out_id,
             op_type="Constant",
-            attributes={"value": np.array(res.data).tolist()},
+            attributes={"value": to_array(res.data).tolist()},
             shape_metadata=res.shape,
         )
-        print("GRAPH:", getattr(_tracer, "active_graph", None))
         _tracer.add_node(node)
         pt = ProxyTensor(id=out_id, shape=res.shape, dtype=res.dtype.value)
         res = ml_switcheroo.Tensor(
@@ -126,6 +141,7 @@ class Tensor:
 
     def __init__(self, value: Any, dtype=None, _traced_node=None):
         """__init__ docstring."""
+        self._traced_node_ids: dict[int, str] = {}
         if _traced_node is not None:
             from ml_switcheroo.tracing import ProxyTensor
             from ml_switcheroo.core.config import config
@@ -152,13 +168,24 @@ class Tensor:
     @property
     def dtype(self):
         """dtype docstring."""
-        return np.dtype(self._tensor.dtype.value) if self._tensor is not None else None
+        return (
+            to_numpy_dtype(self._tensor.dtype.value)
+            if self._tensor is not None
+            else None
+        )
 
     def numpy(self):
         """numpy docstring."""
         if hasattr(self._tensor.data, "id"):
+            from ml_switcheroo.tracing import _tracer
+
+            current_graph = getattr(_tracer, "active_graph", None)
+            if current_graph and self._tensor.data.id in current_graph.nodes:
+                node = current_graph.nodes[self._tensor.data.id]
+                if node.op_type == "Constant":
+                    return to_array(node.attributes["value"])
             raise ValueError("Cannot call numpy on a traced tensor")
-        return np.array(self._tensor.data)
+        return to_array(self._tensor.data)
 
     def __add__(self, other):
         """__add__ docstring."""
@@ -301,7 +328,7 @@ def function(func):
 
         def _to_tensor_if_possible(x):
             """_to_tensor_if_possible docstring."""
-            if isinstance(x, (int, float, list, np.ndarray, Tensor, Variable)):
+            if isinstance(x, (int, float, list, ndarray, Tensor, Variable)):
                 return _wrap(_to_tensor(x))
             return x
 
@@ -338,24 +365,84 @@ class GradientTape:
         """__init__ docstring."""
         self.persistent = persistent
         self.watched = []
+        self._tape = None
 
     def __enter__(self):
         """__enter__ docstring."""
+        from ml_switcheroo.tracing import TracerTape, _tracer
+
+        self._prev_tracer_graph = getattr(_tracer, "active_graph", None)
+        self._prev_is_tracing = getattr(_tracer, "is_tracing", False)
+
+        if self._prev_is_tracing and self._prev_tracer_graph is not None:
+            self._tape = None
+            self._graph = self._prev_tracer_graph
+        else:
+            self._tape = TracerTape()
+            self._graph = self._tape.start_tracing("GradientTape")
+            _tracer.active_graph = self._graph
+            _tracer.is_tracing = True
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """__exit__ docstring."""
-        pass
+        from ml_switcheroo.tracing import _tracer
+
+        _tracer.active_graph = self._prev_tracer_graph
+        _tracer.is_tracing = self._prev_is_tracing
 
     def watch(self, tensor):
         """watch docstring."""
         self.watched.append(tensor)
+        if isinstance(tensor, Tensor):
+            # Evaluate it so that it gets a node ID assigned to the current graph
+            _to_tensor(tensor)
 
     def gradient(self, target, sources):
         """gradient docstring."""
-        if isinstance(sources, (list, tuple)):
-            return [Tensor([1.0]) for _ in sources]
-        return Tensor([1.0])
+        from ml_switcheroo.grad import grad
+        from ml_switcheroo.interpreter import evaluate_graph
+
+        if target is None:
+            return None
+
+        target_id = getattr(getattr(target._tensor, "data", None), "id", None)
+        if target_id is None:
+            raise ValueError("Target was not created during the tape's recording.")
+
+        is_single = not isinstance(sources, (list, tuple))
+        sources_list = [sources] if is_single else sources
+
+        wrt_ids = []
+        for s in sources_list:
+            if not isinstance(s, Tensor):
+                wrt_ids.append(None)
+                continue
+            graph_id = id(self._graph)
+            if hasattr(s, "_traced_node_ids") and graph_id in s._traced_node_ids:
+                wrt_ids.append(s._traced_node_ids[graph_id])
+            else:
+                data_id = getattr(getattr(s._tensor, "data", None), "id", None)
+                wrt_ids.append(data_id)
+
+        valid_wrt_ids = [w for w in wrt_ids if w is not None]
+        if not valid_wrt_ids:
+            return [None for _ in sources_list] if not is_single else None
+
+        grad_graph = grad(self._graph, valid_wrt_ids, target_id)
+        out_vals = evaluate_graph(grad_graph, {})
+
+        res = []
+        valid_idx = 0
+        for w in wrt_ids:
+            if w is None:
+                res.append(None)
+            else:
+                grad_val = out_vals[grad_graph.outputs[valid_idx]]
+                res.append(Tensor(grad_val))
+                valid_idx += 1
+
+        return res[0] if is_single else res
 
 
 class math:

@@ -1,7 +1,6 @@
 """TensorFlow nn module."""
 
 from typing import Optional, Any
-import numpy as np
 import ml_switcheroo.nn as _nn
 from . import Tensor, _to_tensor, _wrap
 
@@ -47,14 +46,6 @@ def selu(
 ) -> Tensor:
     """Computes scaled exponential linear: scale * alpha * (exp(features) - 1)."""
     _check_none(features)
-    from ml_switcheroo.core.config import config
-
-    if config.eager_mode:
-        data = np.array(features)
-        scale = 1.0507009873554804934193349852946
-        alpha_val = 1.6732632423543772848170429916717
-        res = scale * np.where(data > 0, data, alpha_val * (np.exp(data) - 1))
-        return _wrap(_to_tensor(res))
     return _wrap(_nn.selu(_to_tensor(features), *args, **kwargs))
 
 
@@ -75,13 +66,6 @@ def softmax(
     _check_none(logits)
     if axis is None:
         axis = -1
-    from ml_switcheroo.core.config import config
-
-    if config.eager_mode:
-        data = np.array(logits)
-        e_x = np.exp(data - np.max(data, axis=axis, keepdims=True))
-        res = e_x / e_x.sum(axis=axis, keepdims=True)
-        return _wrap(_to_tensor(res))
     return _wrap(_nn.softmax(_to_tensor(logits), dim=axis, *args, **kwargs))
 
 
