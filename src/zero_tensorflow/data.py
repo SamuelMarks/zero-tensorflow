@@ -8,7 +8,7 @@ __all__ = [
     "FixedLengthRecordDataset",
     "Iterator",
     "IteratorSpec",
-    "NumpyIterator",
+    "ArrayIterator",
     "Options",
     "TFRecordDataset",
     "TextLineDataset",
@@ -156,9 +156,9 @@ class Iterator:
         return self
 
 
-class NumpyIterator:
+class ArrayIterator:
     """
-    Iterator over a dataset returning numpy arrays.
+    Iterator over a dataset returning arrays.
 
     Args:
         dataset: The dataset to iterate over.
@@ -188,7 +188,7 @@ class NumpyIterator:
         """
         return next(self._iterator)
 
-    def __iter__(self) -> "NumpyIterator":
+    def __iter__(self) -> "ArrayIterator":
         """
         Get the iterator.
 
@@ -196,7 +196,7 @@ class NumpyIterator:
             None
 
         Returns:
-            NumpyIterator: The iterator.
+            ArrayIterator: The iterator.
         """
         return self
 

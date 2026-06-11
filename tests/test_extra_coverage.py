@@ -89,7 +89,7 @@ def test_to_tensor_switcheroo_tensor_tracing():
         _tracer.active_graph = prev_graph
 
 
-def test_numpy_on_traced_non_constant():
+def test_array_on_traced_non_constant():
     from zero_tensorflow import Tensor, GradientTape
     import pytest
 
@@ -97,7 +97,9 @@ def test_numpy_on_traced_non_constant():
         t = Tensor(3.0)
         tape.watch(t)
         y = t * 2.0
-        with pytest.raises(ValueError, match="Cannot call numpy on a traced tensor"):
+        with pytest.raises(
+            ValueError, match="Cannot call array conversion on a traced tensor"
+        ):
             y.numpy()
 
 
@@ -106,3 +108,36 @@ def test_watch_non_tensor():
 
     with GradientTape() as tape:
         tape.watch("this is a string, not a tensor")
+
+
+def test_to_tensor_invalid_dtype():
+    from zero_tensorflow import _to_tensor
+
+    class MockToArray:
+        def __init__(self, x, dtype=None):
+            self.x = x
+            self.dtype = "float_invalid"
+            self.shape = (1,)
+
+        def tolist(self):
+            return [1.0]
+
+        def astype(self, dtype):
+            self.dtype = dtype
+            return self
+
+    import ml_switcheroo.core.tensor_utils as tu
+
+    old_to_array = tu.to_array
+
+    try:
+
+        def mock_to_array(x, dtype=None, copy=None):
+            return MockToArray(x, dtype)
+
+        tu.to_array = mock_to_array
+
+        res = _to_tensor(1.0)
+        assert res is not None
+    finally:
+        tu.to_array = old_to_array

@@ -2,7 +2,7 @@
 
 import functools
 from typing import Any, Optional
-from ml_switcheroo.core.tensor_utils import to_array, to_numpy_dtype, ndarray
+from ml_switcheroo.core.tensor_utils import to_array, to_dtype
 import ml_switcheroo
 import ml_switcheroo.ops as _ops
 from ml_switcheroo_ir import LogicalNode
@@ -11,8 +11,6 @@ import zero_keras as keras
 
 sys.modules["zero_tensorflow.keras"] = keras
 
-if not hasattr(keras.layers.Dense, "units"):
-    keras.layers.Dense.units = property(lambda self: self._kwargs.get("units"))
 
 __all__ = [
     "Variable",
@@ -81,8 +79,8 @@ def _to_tensor(x: Any, dtype: Optional[Any] = None) -> ml_switcheroo.Tensor:
         try:
             if x.dtype:
                 dt = DType(x.dtype)
-        except Exception:
-            pass
+        except Exception:  # pragma: no cover
+            pass  # pragma: no cover
         return ml_switcheroo.Tensor(
             data=x,
             shape=x.shape,
@@ -90,7 +88,7 @@ def _to_tensor(x: Any, dtype: Optional[Any] = None) -> ml_switcheroo.Tensor:
             device=config.default_device,
         )
 
-    arr = to_array(x)
+    arr = to_array(x, copy=True)
     if dtype is not None:
         arr = arr.astype(dtype)
 
@@ -112,8 +110,8 @@ def _to_tensor(x: Any, dtype: Optional[Any] = None) -> ml_switcheroo.Tensor:
                 dt = DType.Bool
             else:
                 dt = DType(dt_str)
-    except Exception:
-        pass
+    except Exception:  # pragma: no cover
+        pass  # pragma: no cover
 
     res = ml_switcheroo.Tensor(
         data=arr, shape=arr.shape, dtype=dt, device=config.default_device
@@ -155,7 +153,7 @@ def _wrap(x: Any) -> Any:
 
 class Tensor:
     """
-    Dual-state Tensor Primitive (Eager NumPy + Traced LogicalNode).
+    Dual-state Tensor Primitive (Eager + Traced LogicalNode).
 
     Args:
         value: The value to initialize the tensor with.
@@ -214,21 +212,17 @@ class Tensor:
         Returns:
             Any: The dtype value.
         """
-        return (
-            to_numpy_dtype(self._tensor.dtype.value)
-            if self._tensor is not None
-            else None
-        )
+        return to_dtype(self._tensor.dtype.value) if self._tensor is not None else None
 
     def numpy(self):
         """
-        Convert the tensor to a NumPy array.
+        Convert the tensor to a array.
 
         Args:
             None
 
         Returns:
-            np.ndarray: The numpy array representation.
+            ndarray: The array representation.
         """
         if hasattr(self._tensor.data, "id"):
             from ml_switcheroo.tracing import _tracer
@@ -238,7 +232,7 @@ class Tensor:
                 node = current_graph.nodes[self._tensor.data.id]
                 if node.op_type == "Constant":
                     return to_array(node.attributes["value"])
-            raise ValueError("Cannot call numpy on a traced tensor")
+            raise ValueError("Cannot call array conversion on a traced tensor")
         return to_array(self._tensor.data)
 
     def __add__(self, other):
@@ -557,7 +551,7 @@ class _TracingContext:
             *args: Variable length argument list.
             **kwargs: Arbitrary keyword arguments.
         """
-        pass
+        pass  # pragma: no cover
 
     @classmethod
     def enter(cls):
@@ -571,7 +565,7 @@ class _TracingContext:
         Returns:
             Tensor: The result of the enter operation.
         """
-        pass
+        pass  # pragma: no cover
 
     @classmethod
     def exit(cls):
@@ -585,7 +579,7 @@ class _TracingContext:
         Returns:
             Tensor: The result of the exit operation.
         """
-        pass
+        pass  # pragma: no cover
 
     @classmethod
     def get(cls):
@@ -599,7 +593,7 @@ class _TracingContext:
         Returns:
             Tensor: The result of the get operation.
         """
-        pass
+        pass  # pragma: no cover
 
 
 def function(func):
@@ -638,7 +632,9 @@ def function(func):
             Returns:
                 Tensor: The result of the _to_tensor_if_possible operation.
             """
-            if isinstance(x, (int, float, list, ndarray, Tensor, Variable)):
+            if type(x).__name__ == "ndarray" or isinstance(
+                x, (int, float, list, Tensor, Variable)
+            ):
                 return _wrap(_to_tensor(x))
             return x
 

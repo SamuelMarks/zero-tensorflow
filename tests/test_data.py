@@ -63,9 +63,9 @@ def test_iterator():
     assert next(iter(it)) == 2
 
 
-def test_numpy_iterator():
+def test_array_iterator():
     ds = data.Dataset([1, 2, 3])
-    it = data.NumpyIterator(ds)
+    it = data.ArrayIterator(ds)
     assert next(it) == 1
     assert next(iter(it)) == 2
 

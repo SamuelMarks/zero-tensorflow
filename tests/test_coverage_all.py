@@ -114,7 +114,7 @@ def test_data_coverage():
         d.unbatch()
         d.window(1)
         d.apply(lambda x: x)
-        d.as_numpy_iterator()
+        d.as_array_iterator()
         iter(d)
         d.cardinality()
         d.options()

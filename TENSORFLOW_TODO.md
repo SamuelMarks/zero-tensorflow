@@ -1,3 +1,6 @@
+# TENSORFLOW TODO
+Status: Completed
+
 Extracting target APIs from /Users/samuel/repos/zero-tensorflow/src...
 Scoring compliance...
 

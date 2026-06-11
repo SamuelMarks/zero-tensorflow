@@ -99,7 +99,19 @@ def selu(
         Tensor: A Tensor representing the scaled exponential linear activation of the input.
     """
     _check_none(features)
-    return _wrap(_nn.selu(_to_tensor(features), *args, **kwargs))
+    t = _to_tensor(features)
+    from ml_switcheroo.core.config import config
+
+    if config.eager_mode:
+        import numpy as np
+        from ml_switcheroo.core.tensor_utils import to_array
+
+        x = to_array(t)
+        scale = 1.0507009873554804934193349852946
+        alpha = 1.6732632423543772848170429916717
+        res = scale * np.where(x > 0.0, x, alpha * (np.exp(x) - 1.0))
+        return _wrap(_to_tensor(res))
+    return _wrap(_nn.selu(t, *args, **kwargs))
 
 
 def sigmoid(x: Any, *args: Any, name: Optional[str] = None, **kwargs: Any) -> Tensor:
@@ -142,7 +154,18 @@ def softmax(
     _check_none(logits)
     if axis is None:
         axis = -1
-    return _wrap(_nn.softmax(_to_tensor(logits), dim=axis, *args, **kwargs))
+    t = _to_tensor(logits)
+    from ml_switcheroo.core.config import config
+
+    if config.eager_mode:
+        import numpy as np
+        from ml_switcheroo.core.tensor_utils import to_array
+
+        x = to_array(t)
+        e_x = np.exp(x - np.max(x, axis=axis, keepdims=True))
+        res = e_x / e_x.sum(axis=axis, keepdims=True)
+        return _wrap(_to_tensor(res))
+    return _wrap(_nn.softmax(t, dim=axis, *args, **kwargs))
 
 
 def tanh(x: Any, *args: Any, name: Optional[str] = None, **kwargs: Any) -> Tensor:

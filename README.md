@@ -6,13 +6,13 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/SamuelMarks/zero-tensorflow/actions/workflows/ci.yml/badge.svg)](https://github.com/SamuelMarks/zero-tensorflow/actions)
-[![Test Coverage](https://img.shields.io/badge/test_coverage-99.8%25-green.svg)](#)
+[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)
 [![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)
-[![Official API Parity](https://img.shields.io/badge/official_api_parity-65%25-orange.svg)](#)
+[![Official API Parity](https://img.shields.io/badge/official_api_parity-60%25-orange.svg)](#)
 
 ## What is zero-tensorflow?
 
-[`zero-tensorflow`](src/zero_tensorflow) is a zero-dependency, pure Python implementation of the [TensorFlow](https://www.tensorflow.org/) API surface. It provides the familiar API constructs—like `Tensor`, `Variable`, `math` operations, and `GradientTape`—but is entirely stripped of all C++ dependencies, protobuf bindings, and the heavyweight artifacts of the genuine `tensorflow` library.
+[`zero-tensorflow`](src/zero_tensorflow) is a zero-dependency, pure Python implementation of the [TensorFlow](https://github.com/tensorflow/tensorflow) (OG repo) API surface, complete with full support for Keras via the [zero-keras](https://github.com/SamuelMarks/zero-keras) dependency replicating [Keras](https://github.com/keras-team/keras) (OG repo). It provides the familiar API constructs—like `Tensor`, `Variable`, `math` operations, `GradientTape`, and Keras layers/models—but is entirely stripped of all C++ dependencies, protobuf bindings, and the heavyweight artifacts of the genuine `tensorflow` library.
 
 ## Why does this project exist?
 

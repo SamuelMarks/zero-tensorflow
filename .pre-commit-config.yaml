@@ -41,3 +41,10 @@ repos:
         entry: python3 -m build
         language: system
         pass_filenames: false
+
+      - id: check-imports
+        name: Check Disallowed Imports
+        entry: python3 scripts/check_imports.py
+        language: system
+        types: [python]
+        pass_filenames: false

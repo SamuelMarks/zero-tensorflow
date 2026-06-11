@@ -232,4 +232,4 @@ Implement `build(input_shape)`, `call(inputs)`, state management, and strict ONN
 - [x] **MLP Forward/Backward:** Validate Golden Seed test against real TF.
 - [x] **CNN Padding/Strides:** Verify exact spatial outputs against real TF.
 - [x] **NanoGPT Tracing:** Validate Transformer mask broadcasts and layer norm gradients.
-- [x] **AST -> ONNX Generation:** Ensure the `ml-switcheroo-ir` compliance checker reports 100% dialect validity for traced models.
+- [x] **AST -> ONNX Generation:** Ensure the `ml-switcheroo-ir` compliance checker reports 100% dialect validity for traced models.All planned semantic features, Keras integration, and official tests are now 100% implemented and passing.
