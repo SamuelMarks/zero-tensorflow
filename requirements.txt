@@ -1,3 +1,2 @@
-numpy
 ml-switcheroo-compiler
 zero-keras

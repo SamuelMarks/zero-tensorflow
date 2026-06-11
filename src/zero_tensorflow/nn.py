@@ -8,13 +8,32 @@ __all__ = ["elu", "leaky_relu", "relu", "selu", "sigmoid", "softmax", "tanh"]
 
 
 def _check_none(features):
-    """_check_none docstring."""
+    """
+    Check if features are None and raise an error if so.
+
+    Args:
+        features (Any): The features to check.
+
+    Raises:
+        ValueError: If features is None.
+    """
     if features is None:
         raise ValueError("features cannot be None")
 
 
 def elu(features: Any, *args: Any, name: Optional[str] = None, **kwargs: Any) -> Tensor:
-    """Computes the exponential linear function."""
+    """
+    Computes the exponential linear function.
+
+    Args:
+        features (Any): The input features.
+        *args (Any): Variable length argument list.
+        name (Optional[str]): Optional name for the operation.
+        **kwargs (Any): Arbitrary keyword arguments.
+
+    Returns:
+        Tensor: A Tensor representing the exponential linear function of the input.
+    """
     _check_none(features)
     return _wrap(_nn.elu(_to_tensor(features), *args, **kwargs))
 
@@ -26,7 +45,19 @@ def leaky_relu(
     name: Optional[str] = None,
     **kwargs: Any,
 ) -> Tensor:
-    """Compute the Leaky ReLU activation function."""
+    """
+    Compute the Leaky ReLU activation function.
+
+    Args:
+        features (Any): The input features.
+        *args (Any): Variable length argument list.
+        alpha (float): Slope of the activation function at x < 0.
+        name (Optional[str]): Optional name for the operation.
+        **kwargs (Any): Arbitrary keyword arguments.
+
+    Returns:
+        Tensor: A Tensor representing the Leaky ReLU activation of the input.
+    """
     _check_none(features)
     return _wrap(
         _nn.leaky_relu(_to_tensor(features), negative_slope=alpha, *args, **kwargs)
@@ -36,7 +67,18 @@ def leaky_relu(
 def relu(
     features: Any, *args: Any, name: Optional[str] = None, **kwargs: Any
 ) -> Tensor:
-    """Computes rectified linear: max(features, 0)."""
+    """
+    Computes rectified linear: max(features, 0).
+
+    Args:
+        features (Any): The input features.
+        *args (Any): Variable length argument list.
+        name (Optional[str]): Optional name for the operation.
+        **kwargs (Any): Arbitrary keyword arguments.
+
+    Returns:
+        Tensor: A Tensor representing the rectified linear activation of the input.
+    """
     _check_none(features)
     return _wrap(_nn.relu(_to_tensor(features), *args, **kwargs))
 
@@ -44,13 +86,35 @@ def relu(
 def selu(
     features: Any, *args: Any, name: Optional[str] = None, **kwargs: Any
 ) -> Tensor:
-    """Computes scaled exponential linear: scale * alpha * (exp(features) - 1)."""
+    """
+    Computes scaled exponential linear: scale * alpha * (exp(features) - 1).
+
+    Args:
+        features (Any): The input features.
+        *args (Any): Variable length argument list.
+        name (Optional[str]): Optional name for the operation.
+        **kwargs (Any): Arbitrary keyword arguments.
+
+    Returns:
+        Tensor: A Tensor representing the scaled exponential linear activation of the input.
+    """
     _check_none(features)
     return _wrap(_nn.selu(_to_tensor(features), *args, **kwargs))
 
 
 def sigmoid(x: Any, *args: Any, name: Optional[str] = None, **kwargs: Any) -> Tensor:
-    """Computes sigmoid of x element-wise."""
+    """
+    Computes sigmoid of x element-wise.
+
+    Args:
+        x (Any): The input tensor.
+        *args (Any): Variable length argument list.
+        name (Optional[str]): Optional name for the operation.
+        **kwargs (Any): Arbitrary keyword arguments.
+
+    Returns:
+        Tensor: A Tensor representing the sigmoid activation of the input.
+    """
     _check_none(x)
     return _wrap(_nn.sigmoid(_to_tensor(x), *args, **kwargs))
 
@@ -62,7 +126,19 @@ def softmax(
     name: Optional[str] = None,
     **kwargs: Any,
 ) -> Tensor:
-    """Computes softmax activations."""
+    """
+    Computes softmax activations.
+
+    Args:
+        logits (Any): The input logits.
+        *args (Any): Variable length argument list.
+        axis (Optional[int]): The dimension softmax would be performed on.
+        name (Optional[str]): Optional name for the operation.
+        **kwargs (Any): Arbitrary keyword arguments.
+
+    Returns:
+        Tensor: A Tensor representing the softmax activation of the input.
+    """
     _check_none(logits)
     if axis is None:
         axis = -1
@@ -70,6 +146,17 @@ def softmax(
 
 
 def tanh(x: Any, *args: Any, name: Optional[str] = None, **kwargs: Any) -> Tensor:
-    """Computes hyperbolic tangent of x element-wise."""
+    """
+    Computes hyperbolic tangent of x element-wise.
+
+    Args:
+        x (Any): The input tensor.
+        *args (Any): Variable length argument list.
+        name (Optional[str]): Optional name for the operation.
+        **kwargs (Any): Arbitrary keyword arguments.
+
+    Returns:
+        Tensor: A Tensor representing the hyperbolic tangent activation of the input.
+    """
     _check_none(x)
     return _wrap(_nn.tanh(_to_tensor(x), *args, **kwargs))

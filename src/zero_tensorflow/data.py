@@ -17,7 +17,13 @@ __all__ = [
 
 
 class ThreadingOptions:
-    """ThreadingOptions docstring."""
+    """
+    Threading options for dataset operations.
+
+    Args:
+        max_intra_op_parallelism: Maximum parallelism.
+        private_threadpool_size: Threadpool size.
+    """
 
     def __init__(
         self,
@@ -26,16 +32,34 @@ class ThreadingOptions:
         *args: Any,
         **kwargs: Any,
     ):
-        """__init__ docstring."""
+        """
+        Initialize the object.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         self.max_intra_op_parallelism = max_intra_op_parallelism
         self.private_threadpool_size = private_threadpool_size
 
 
 class Options:
-    """Options docstring."""
+    """
+    Options for dataset operations.
+
+    Args:
+        autotune: Whether to autotune.
+        threading: Threading options.
+    """
 
     def __init__(self, autotune=None, threading=None, *args: Any, **kwargs: Any):
-        """__init__ docstring."""
+        """
+        Initialize the object.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         self.autotune = autotune
         self.threading = threading if threading is not None else ThreadingOptions()
         for k, v in kwargs.items():
@@ -43,77 +67,181 @@ class Options:
 
 
 class DatasetSpec:
-    """DatasetSpec docstring."""
+    """
+    Specification for a dataset.
+
+    Args:
+        element_spec: Spec for elements.
+        dataset_shape: Shape of the dataset.
+    """
 
     __slots__ = ["_element_spec", "_dataset_shape"]
 
     def __init__(
         self, element_spec=None, dataset_shape=None, *args: Any, **kwargs: Any
     ):
-        """__init__ docstring."""
+        """
+        Initialize the object.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         self._element_spec = element_spec
         self._dataset_shape = dataset_shape
 
 
 class IteratorSpec:
-    """IteratorSpec docstring."""
+    """
+    Specification for an iterator.
+
+    Args:
+        element_spec: Spec for elements.
+    """
 
     __slots__ = ["_element_spec"]
 
     def __init__(self, element_spec=None, *args: Any, **kwargs: Any):
-        """__init__ docstring."""
+        """
+        Initialize the object.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         self._element_spec = element_spec
 
 
 class Iterator:
-    """Iterator docstring."""
+    """
+    Iterator over a dataset.
+
+    Args:
+        dataset: The dataset to iterate over.
+    """
 
     def __init__(self, dataset, *args: Any, **kwargs: Any):
-        """__init__ docstring."""
+        """
+        Initialize the object.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         self._dataset = dataset
         self._iter = iter(dataset)
 
     def __next__(self) -> Any:
-        """__next__ docstring."""
+        """
+        Get the next element.
+
+        Args:
+            None
+
+        Returns:
+            Any: The next element.
+        """
         return next(self._iter)
 
     def __iter__(self) -> "Iterator":
-        """__iter__ docstring."""
+        """
+        Get the iterator.
+
+        Args:
+            None
+
+        Returns:
+            Iterator: The iterator.
+        """
         return self
 
 
 class NumpyIterator:
-    """NumpyIterator docstring."""
+    """
+    Iterator over a dataset returning numpy arrays.
+
+    Args:
+        dataset: The dataset to iterate over.
+    """
 
     __slots__ = ["_iterator"]
 
     def __init__(self, dataset, *args: Any, **kwargs: Any):
-        """__init__ docstring."""
+        """
+        Initialize the object.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         self._iterator = iter(dataset)
 
     def __next__(self) -> Any:
-        """__next__ docstring."""
+        """
+        Get the next element.
+
+        Args:
+            None
+
+        Returns:
+            Any: The next element.
+        """
         return next(self._iterator)
 
     def __iter__(self) -> "NumpyIterator":
-        """__iter__ docstring."""
+        """
+        Get the iterator.
+
+        Args:
+            None
+
+        Returns:
+            NumpyIterator: The iterator.
+        """
         return self
 
 
 class Dataset:
-    """Dataset docstring."""
+    """
+    Dataset object.
+
+    Args:
+        elements: Elements of the dataset.
+    """
 
     def __init__(self, elements, *args: Any, **kwargs: Any):
-        """__init__ docstring."""
+        """
+        Initialize the object.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         self.elements = list(elements) if elements is not None else []
 
     @classmethod
     def from_tensor_slices(cls, tensors: Any) -> "Dataset":
-        """from_tensor_slices docstring."""
+        """
+        Create a dataset from tensor slices.
+
+        Args:
+            tensors (Any): Tensors to slice.
+
+        Returns:
+            Dataset: The created dataset.
+        """
         return cls(tensors)
 
     def batch(self, batch_size: int) -> "Dataset":
-        """batch docstring."""
+        """
+        Batch the dataset elements.
+
+        Args:
+            batch_size (int): Size of the batches.
+
+        Returns:
+            Dataset: A new batched dataset.
+        """
         batched = [
             self.elements[i : i + batch_size]
             for i in range(0, len(self.elements), batch_size)
@@ -121,23 +249,58 @@ class Dataset:
         return Dataset(batched)
 
     def map(self, map_func: Callable[[Any], Any]) -> "Dataset":
-        """map docstring."""
+        """
+        Map a function over the dataset.
+
+        Args:
+            map_func (Callable): Function to apply.
+
+        Returns:
+            Dataset: A new dataset with mapped elements.
+        """
         return Dataset([map_func(e) for e in self.elements])
 
     def shuffle(self, buffer_size: int) -> "Dataset":
-        """shuffle docstring."""
+        """
+        Shuffle the dataset.
+
+        Args:
+            buffer_size (int): Number of elements from which to shuffle.
+
+        Returns:
+            Dataset: The shuffled dataset.
+        """
         return self
 
-    def __iter__(self) -> PyIterator[Any]:
-        """__iter__ docstring."""
+    def __iter__(self) -> "PyIterator[Any]":
+        """
+        Get the iterator.
+
+        Args:
+            None
+
+        Returns:
+            PyIterator[Any]: The iterator.
+        """
         return iter(self.elements)
 
 
 class FixedLengthRecordDataset(Dataset):
-    """FixedLengthRecordDataset docstring."""
+    """
+    Dataset for fixed length records.
+
+    Args:
+        filenames: Files to read.
+    """
 
     def __init__(self, filenames=None, *args: Any, **kwargs: Any):
-        """__init__ docstring."""
+        """
+        Initialize the object.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         super().__init__([])
         self.filenames = filenames
         for k, v in kwargs.items():
@@ -145,10 +308,21 @@ class FixedLengthRecordDataset(Dataset):
 
 
 class TFRecordDataset(Dataset):
-    """TFRecordDataset docstring."""
+    """
+    Dataset for TFRecords.
+
+    Args:
+        filenames: Files to read.
+    """
 
     def __init__(self, filenames=None, *args: Any, **kwargs: Any):
-        """__init__ docstring."""
+        """
+        Initialize the object.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         super().__init__([])
         self.filenames = filenames
         for k, v in kwargs.items():
@@ -156,10 +330,21 @@ class TFRecordDataset(Dataset):
 
 
 class TextLineDataset(Dataset):
-    """TextLineDataset docstring."""
+    """
+    Dataset for text lines.
+
+    Args:
+        filenames: Files to read.
+    """
 
     def __init__(self, filenames=None, *args: Any, **kwargs: Any):
-        """__init__ docstring."""
+        """
+        Initialize the object.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         super().__init__([])
         self.filenames = filenames
         for k, v in kwargs.items():

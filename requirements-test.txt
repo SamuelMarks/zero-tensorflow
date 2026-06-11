@@ -4,3 +4,4 @@ absl-py
 parameterized
 mock
 pytest-json-report
+numpy

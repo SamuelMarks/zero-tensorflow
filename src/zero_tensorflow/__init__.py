@@ -27,7 +27,16 @@ __all__ = [
 
 
 def _to_tensor(x: Any, dtype: Optional[Any] = None) -> ml_switcheroo.Tensor:
-    """_to_tensor docstring."""
+    """
+    Convert input to a Tensor.
+
+    Args:
+        x (Any): Input data.
+        dtype (Optional[Any]): Target data type.
+
+    Returns:
+        ml_switcheroo.Tensor: The converted tensor.
+    """
     original_tensor = None
     if isinstance(x, Tensor):
         original_tensor = x
@@ -126,7 +135,15 @@ def _to_tensor(x: Any, dtype: Optional[Any] = None) -> ml_switcheroo.Tensor:
 
 
 def _wrap(x: Any) -> Any:
-    """_wrap docstring."""
+    """
+    Wrap input into a Tensor or collection of Tensors.
+
+    Args:
+        x (Any): Input data.
+
+    Returns:
+        Any: Wrapped tensor or collection.
+    """
     if isinstance(x, Tensor):
         return x
     if isinstance(x, tuple):
@@ -137,10 +154,23 @@ def _wrap(x: Any) -> Any:
 
 
 class Tensor:
-    """Dual-state Tensor Primitive (Eager NumPy + Traced LogicalNode)."""
+    """
+    Dual-state Tensor Primitive (Eager NumPy + Traced LogicalNode).
+
+    Args:
+        value: The value to initialize the tensor with.
+        dtype: The data type.
+        _traced_node: Internal node.
+    """
 
     def __init__(self, value: Any, dtype=None, _traced_node=None):
-        """__init__ docstring."""
+        """
+        Initialize the object.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         self._traced_node_ids: dict[int, str] = {}
         if _traced_node is not None:
             from ml_switcheroo.tracing import ProxyTensor
@@ -162,12 +192,28 @@ class Tensor:
 
     @property
     def shape(self):
-        """shape docstring."""
+        """
+        Get the shape of the tensor.
+
+        Args:
+            None
+
+        Returns:
+            Any: The shape value.
+        """
         return self._tensor.shape if self._tensor is not None else ()
 
     @property
     def dtype(self):
-        """dtype docstring."""
+        """
+        Get the dtype of the tensor.
+
+        Args:
+            None
+
+        Returns:
+            Any: The dtype value.
+        """
         return (
             to_numpy_dtype(self._tensor.dtype.value)
             if self._tensor is not None
@@ -175,7 +221,15 @@ class Tensor:
         )
 
     def numpy(self):
-        """numpy docstring."""
+        """
+        Convert the tensor to a NumPy array.
+
+        Args:
+            None
+
+        Returns:
+            np.ndarray: The numpy array representation.
+        """
         if hasattr(self._tensor.data, "id"):
             from ml_switcheroo.tracing import _tracer
 
@@ -188,63 +242,183 @@ class Tensor:
         return to_array(self._tensor.data)
 
     def __add__(self, other):
-        """__add__ docstring."""
+        """
+        Compute add operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return _wrap(_ops.add(_to_tensor(self), _to_tensor(other)))
 
     def __sub__(self, other):
-        """__sub__ docstring."""
+        """
+        Compute sub operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return _wrap(_ops.subtract(_to_tensor(self), _to_tensor(other)))
 
     def __mul__(self, other):
-        """__mul__ docstring."""
+        """
+        Compute mul operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return _wrap(_ops.multiply(_to_tensor(self), _to_tensor(other)))
 
     def __truediv__(self, other):
-        """__truediv__ docstring."""
+        """
+        Compute truediv operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return _wrap(_ops.divide(_to_tensor(self), _to_tensor(other)))
 
     def __radd__(self, other):
-        """__radd__ docstring."""
+        """
+        Compute radd operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return _wrap(_ops.add(_to_tensor(other), _to_tensor(self)))
 
     def __rsub__(self, other):
-        """__rsub__ docstring."""
+        """
+        Compute rsub operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return _wrap(_ops.subtract(_to_tensor(other), _to_tensor(self)))
 
     def __rmul__(self, other):
-        """__rmul__ docstring."""
+        """
+        Compute rmul operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return _wrap(_ops.multiply(_to_tensor(other), _to_tensor(self)))
 
     def __rtruediv__(self, other):
-        """__rtruediv__ docstring."""
+        """
+        Compute rtruediv operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return _wrap(_ops.divide(_to_tensor(other), _to_tensor(self)))
 
     def __eq__(self, other):
-        """__eq__ docstring."""
+        """
+        Compute eq operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return _wrap(_ops.equal(_to_tensor(self), _to_tensor(other)))
 
     def __ne__(self, other):
-        """__ne__ docstring."""
+        """
+        Compute ne operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return _wrap(_ops.not_equal(_to_tensor(self), _to_tensor(other)))
 
     def __lt__(self, other):
-        """__lt__ docstring."""
+        """
+        Compute lt operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return _wrap(_ops.less(_to_tensor(self), _to_tensor(other)))
 
     def __le__(self, other):
-        """__le__ docstring."""
+        """
+        Compute le operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return _wrap(_ops.less_equal(_to_tensor(self), _to_tensor(other)))
 
     def __gt__(self, other):
-        """__gt__ docstring."""
+        """
+        Compute gt operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return _wrap(_ops.greater(_to_tensor(self), _to_tensor(other)))
 
     def __ge__(self, other):
-        """__ge__ docstring."""
+        """
+        Compute ge operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return _wrap(_ops.greater_equal(_to_tensor(self), _to_tensor(other)))
 
     def __bool__(self):
-        """__bool__ docstring."""
+        """
+        Compute bool operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         if hasattr(self._tensor.data, "id"):
             raise TypeError(
                 "Using a `tf.Tensor` as a Python `bool` is not allowed in Graph execution."
@@ -257,77 +431,213 @@ class Tensor:
         )
 
     def __nonzero__(self):
-        """__nonzero__ docstring."""
+        """
+        Compute nonzero operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return self.__bool__()
 
     def __len__(self):
-        """__len__ docstring."""
+        """
+        Compute len operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         return self.shape[0] if len(self.shape) > 0 else 0
 
 
 class Variable(Tensor):
-    """Variable docstring."""
+    """
+    A mutable Tensor.
+
+    Args:
+        initial_value: The initial value.
+        trainable: Whether the variable is trainable.
+        name: Variable name.
+        dtype: Data type.
+        shape: Tensor shape.
+    """
 
     def __init__(self, initial_value, trainable=True):
-        """__init__ docstring."""
+        """
+        Initialize the object.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         super().__init__(initial_value)
         self.trainable = trainable
 
     @property
     def value(self):
-        """value docstring."""
+        """
+        Apply value operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the value operation.
+        """
         return self
 
     def assign(self, value):
-        """assign docstring."""
+        """
+        Apply assign operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the assign operation.
+        """
         self._tensor = _to_tensor(value)
         return self
 
     def assign_add(self, delta):
-        """assign_add docstring."""
+        """
+        Apply assign_add operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the assign_add operation.
+        """
         self._tensor = _ops.add(self._tensor, _to_tensor(delta))
         return self
 
     def assign_sub(self, delta):
-        """assign_sub docstring."""
+        """
+        Apply assign_sub operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the assign_sub operation.
+        """
         self._tensor = _ops.subtract(self._tensor, _to_tensor(delta))
         return self
 
 
 class _TracingContext:
-    """_TracingContext docstring."""
+    """
+    Apply _TracingContext operation.
+
+    Args:
+        *args: Variable length argument list.
+        **kwargs: Arbitrary keyword arguments.
+
+    Returns:
+        Tensor: The result of the _TracingContext operation.
+    """
 
     _current_context = None
 
     def __init__(self):
-        """__init__ docstring."""
+        """
+        Initialize the object.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         pass
 
     @classmethod
     def enter(cls):
-        """enter docstring."""
+        """
+        Apply enter operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the enter operation.
+        """
         pass
 
     @classmethod
     def exit(cls):
-        """exit docstring."""
+        """
+        Apply exit operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the exit operation.
+        """
         pass
 
     @classmethod
     def get(cls):
-        """get docstring."""
+        """
+        Apply get operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the get operation.
+        """
         pass
 
 
 def function(func):
-    """function docstring."""
+    """
+    Apply function operation.
+
+    Args:
+        *args: Variable length argument list.
+        **kwargs: Arbitrary keyword arguments.
+
+    Returns:
+        Tensor: The result of the function operation.
+    """
 
     @functools.wraps(func)
     def wrapped(*args, **kwargs):
-        """wrapped docstring."""
+        """
+        Apply wrapped operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the wrapped operation.
+        """
 
         def _to_tensor_if_possible(x):
-            """_to_tensor_if_possible docstring."""
+            """
+            Apply _to_tensor_if_possible operation.
+
+            Args:
+                *args: Variable length argument list.
+                **kwargs: Arbitrary keyword arguments.
+
+            Returns:
+                Tensor: The result of the _to_tensor_if_possible operation.
+            """
             if isinstance(x, (int, float, list, ndarray, Tensor, Variable)):
                 return _wrap(_to_tensor(x))
             return x
@@ -359,16 +669,36 @@ def function(func):
 
 
 class GradientTape:
-    """GradientTape docstring."""
+    """
+    Record operations for automatic differentiation.
+
+    Args:
+        persistent: Whether tape is persistent.
+        watch_accessed_variables: Whether to auto-watch variables.
+    """
 
     def __init__(self, persistent=False):
-        """__init__ docstring."""
+        """
+        Initialize the object.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         self.persistent = persistent
         self.watched = []
         self._tape = None
 
     def __enter__(self):
-        """__enter__ docstring."""
+        """
+        Compute enter operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         from ml_switcheroo.tracing import TracerTape, _tracer
 
         self._prev_tracer_graph = getattr(_tracer, "active_graph", None)
@@ -385,21 +715,47 @@ class GradientTape:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """__exit__ docstring."""
+        """
+        Compute exit operation.
+
+        Args:
+            other: The other operand.
+
+        Returns:
+            Tensor: The result of the operation.
+        """
         from ml_switcheroo.tracing import _tracer
 
         _tracer.active_graph = self._prev_tracer_graph
         _tracer.is_tracing = self._prev_is_tracing
 
     def watch(self, tensor):
-        """watch docstring."""
+        """
+        Apply watch operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the watch operation.
+        """
         self.watched.append(tensor)
         if isinstance(tensor, Tensor):
             # Evaluate it so that it gets a node ID assigned to the current graph
             _to_tensor(tensor)
 
     def gradient(self, target, sources):
-        """gradient docstring."""
+        """
+        Apply gradient operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the gradient operation.
+        """
         from ml_switcheroo.grad import grad
         from ml_switcheroo.interpreter import evaluate_graph
 
@@ -446,1222 +802,2797 @@ class GradientTape:
 
 
 class math:
-    """math docstring."""
+    """
+    Apply math operation.
+
+    Args:
+        *args: Variable length argument list.
+        **kwargs: Arbitrary keyword arguments.
+
+    Returns:
+        Tensor: The result of the math operation.
+    """
 
     @staticmethod
     def abs(*args, **kwargs):
-        """abs docstring."""
+        """
+        Apply abs operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the abs operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "abs")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def acos(*args, **kwargs):
-        """acos docstring."""
+        """
+        Apply acos operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the acos operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "acos")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def acosh(*args, **kwargs):
-        """acosh docstring."""
+        """
+        Apply acosh operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the acosh operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "acosh")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def add(*args, **kwargs):
-        """add docstring."""
+        """
+        Apply add operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the add operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "add")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def all(*args, **kwargs):
-        """all docstring."""
+        """
+        Apply all operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the all operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "all")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def allclose(*args, **kwargs):
-        """allclose docstring."""
+        """
+        Apply allclose operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the allclose operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "allclose")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def any(*args, **kwargs):
-        """any docstring."""
+        """
+        Apply any operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the any operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "any")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def arange(*args, **kwargs):
-        """arange docstring."""
+        """
+        Apply arange operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the arange operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "arange")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def argmax(*args, **kwargs):
-        """argmax docstring."""
+        """
+        Apply argmax operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the argmax operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "argmax")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def argmin(*args, **kwargs):
-        """argmin docstring."""
+        """
+        Apply argmin operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the argmin operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "argmin")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def asin(*args, **kwargs):
-        """asin docstring."""
+        """
+        Apply asin operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the asin operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "asin")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def asinh(*args, **kwargs):
-        """asinh docstring."""
+        """
+        Apply asinh operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the asinh operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "asinh")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def atan(*args, **kwargs):
-        """atan docstring."""
+        """
+        Apply atan operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the atan operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "atan")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def atan2(*args, **kwargs):
-        """atan2 docstring."""
+        """
+        Apply atan2 operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the atan2 operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "atan2")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def atanh(*args, **kwargs):
-        """atanh docstring."""
+        """
+        Apply atanh operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the atanh operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "atanh")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def binary(*args, **kwargs):
-        """binary docstring."""
+        """
+        Apply binary operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the binary operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "binary")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def bitcast(*args, **kwargs):
-        """bitcast docstring."""
+        """
+        Apply bitcast operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the bitcast operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "bitcast")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def bitwise_and(*args, **kwargs):
-        """bitwise_and docstring."""
+        """
+        Apply bitwise_and operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the bitwise_and operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "bitwise_and")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def bitwise_not(*args, **kwargs):
-        """bitwise_not docstring."""
+        """
+        Apply bitwise_not operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the bitwise_not operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "bitwise_not")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def bitwise_or(*args, **kwargs):
-        """bitwise_or docstring."""
+        """
+        Apply bitwise_or operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the bitwise_or operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "bitwise_or")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def bitwise_xor(*args, **kwargs):
-        """bitwise_xor docstring."""
+        """
+        Apply bitwise_xor operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the bitwise_xor operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "bitwise_xor")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def broadcast_to(*args, **kwargs):
-        """broadcast_to docstring."""
+        """
+        Apply broadcast_to operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the broadcast_to operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "broadcast_to")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def cast(*args, **kwargs):
-        """cast docstring."""
+        """
+        Apply cast operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the cast operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "cast")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def cbrt(*args, **kwargs):
-        """cbrt docstring."""
+        """
+        Apply cbrt operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the cbrt operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "cbrt")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def ceil(*args, **kwargs):
-        """ceil docstring."""
+        """
+        Apply ceil operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the ceil operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "ceil")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def cholesky(*args, **kwargs):
-        """cholesky docstring."""
+        """
+        Apply cholesky operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the cholesky operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "cholesky")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def concatenate(*args, **kwargs):
-        """concatenate docstring."""
+        """
+        Apply concatenate operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the concatenate operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "concatenate")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def conj(*args, **kwargs):
-        """conj docstring."""
+        """
+        Apply conj operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the conj operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "conj")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def copysign(*args, **kwargs):
-        """copysign docstring."""
+        """
+        Apply copysign operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the copysign operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "copysign")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def cos(*args, **kwargs):
-        """cos docstring."""
+        """
+        Apply cos operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the cos operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "cos")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def cosh(*args, **kwargs):
-        """cosh docstring."""
+        """
+        Apply cosh operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the cosh operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "cosh")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def count_nonzero(*args, **kwargs):
-        """count_nonzero docstring."""
+        """
+        Apply count_nonzero operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the count_nonzero operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "count_nonzero")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def creation(*args, **kwargs):
-        """creation docstring."""
+        """
+        Apply creation operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the creation operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "creation")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def deg2rad(*args, **kwargs):
-        """deg2rad docstring."""
+        """
+        Apply deg2rad operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the deg2rad operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "deg2rad")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def det(*args, **kwargs):
-        """det docstring."""
+        """
+        Apply det operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the det operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "det")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def diag(*args, **kwargs):
-        """diag docstring."""
+        """
+        Apply diag operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the diag operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "diag")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def digamma(*args, **kwargs):
-        """digamma docstring."""
+        """
+        Apply digamma operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the digamma operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "digamma")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def divide(*args, **kwargs):
-        """divide docstring."""
+        """
+        Apply divide operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the divide operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "divide")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def divmod(*args, **kwargs):
-        """divmod docstring."""
+        """
+        Apply divmod operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the divmod operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "divmod")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def dot(*args, **kwargs):
-        """dot docstring."""
+        """
+        Apply dot operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the dot operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "dot")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def dynamic_slice(*args, **kwargs):
-        """dynamic_slice docstring."""
+        """
+        Apply dynamic_slice operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the dynamic_slice operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "dynamic_slice")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def eigh(*args, **kwargs):
-        """eigh docstring."""
+        """
+        Apply eigh operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the eigh operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "eigh")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def eigvalsh(*args, **kwargs):
-        """eigvalsh docstring."""
+        """
+        Apply eigvalsh operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the eigvalsh operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "eigvalsh")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def einsum(*args, **kwargs):
-        """einsum docstring."""
+        """
+        Apply einsum operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the einsum operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "einsum")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def empty(*args, **kwargs):
-        """empty docstring."""
+        """
+        Apply empty operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the empty operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "empty")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def equal(*args, **kwargs):
-        """equal docstring."""
+        """
+        Apply equal operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the equal operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "equal")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def erf(*args, **kwargs):
-        """erf docstring."""
+        """
+        Apply erf operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the erf operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "erf")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def erfc(*args, **kwargs):
-        """erfc docstring."""
+        """
+        Apply erfc operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the erfc operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "erfc")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def erfinv(*args, **kwargs):
-        """erfinv docstring."""
+        """
+        Apply erfinv operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the erfinv operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "erfinv")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def exp(*args, **kwargs):
-        """exp docstring."""
+        """
+        Apply exp operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the exp operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "exp")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def exp2(*args, **kwargs):
-        """exp2 docstring."""
+        """
+        Apply exp2 operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the exp2 operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "exp2")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def expand(*args, **kwargs):
-        """expand docstring."""
+        """
+        Apply expand operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the expand operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "expand")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def expm1(*args, **kwargs):
-        """expm1 docstring."""
+        """
+        Apply expm1 operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the expm1 operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "expm1")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def eye(*args, **kwargs):
-        """eye docstring."""
+        """
+        Apply eye operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the eye operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "eye")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def fix(*args, **kwargs):
-        """fix docstring."""
+        """
+        Apply fix operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the fix operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "fix")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def flatten(*args, **kwargs):
-        """flatten docstring."""
+        """
+        Apply flatten operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the flatten operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "flatten")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def float_power(*args, **kwargs):
-        """float_power docstring."""
+        """
+        Apply float_power operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the float_power operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "float_power")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def floor(*args, **kwargs):
-        """floor docstring."""
+        """
+        Apply floor operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the floor operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "floor")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def floor_divide(*args, **kwargs):
-        """floor_divide docstring."""
+        """
+        Apply floor_divide operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the floor_divide operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "floor_divide")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def fmax(*args, **kwargs):
-        """fmax docstring."""
+        """
+        Apply fmax operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the fmax operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "fmax")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def fmin(*args, **kwargs):
-        """fmin docstring."""
+        """
+        Apply fmin operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the fmin operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "fmin")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def fmod(*args, **kwargs):
-        """fmod docstring."""
+        """
+        Apply fmod operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the fmod operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "fmod")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def frexp(*args, **kwargs):
-        """frexp docstring."""
+        """
+        Apply frexp operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the frexp operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "frexp")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def full(*args, **kwargs):
-        """full docstring."""
+        """
+        Apply full operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the full operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "full")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def full_like(*args, **kwargs):
-        """full_like docstring."""
+        """
+        Apply full_like operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the full_like operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "full_like")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def gather(*args, **kwargs):
-        """gather docstring."""
+        """
+        Apply gather operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the gather operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "gather")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def gather_nd(*args, **kwargs):
-        """gather_nd docstring."""
+        """
+        Apply gather_nd operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the gather_nd operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "gather_nd")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def gcd(*args, **kwargs):
-        """gcd docstring."""
+        """
+        Apply gcd operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the gcd operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "gcd")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def greater(*args, **kwargs):
-        """greater docstring."""
+        """
+        Apply greater operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the greater operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "greater")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def greater_equal(*args, **kwargs):
-        """greater_equal docstring."""
+        """
+        Apply greater_equal operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the greater_equal operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "greater_equal")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def heaviside(*args, **kwargs):
-        """heaviside docstring."""
+        """
+        Apply heaviside operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the heaviside operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "heaviside")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def hypot(*args, **kwargs):
-        """hypot docstring."""
+        """
+        Apply hypot operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the hypot operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "hypot")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def identity(*args, **kwargs):
-        """identity docstring."""
+        """
+        Apply identity operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the identity operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "identity")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def imag(*args, **kwargs):
-        """imag docstring."""
+        """
+        Apply imag operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the imag operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "imag")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def inner(*args, **kwargs):
-        """inner docstring."""
+        """
+        Apply inner operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the inner operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "inner")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def inv(*args, **kwargs):
-        """inv docstring."""
+        """
+        Apply inv operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the inv operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "inv")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def isclose(*args, **kwargs):
-        """isclose docstring."""
+        """
+        Apply isclose operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the isclose operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "isclose")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def isfinite(*args, **kwargs):
-        """isfinite docstring."""
+        """
+        Apply isfinite operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the isfinite operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "isfinite")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def isinf(*args, **kwargs):
-        """isinf docstring."""
+        """
+        Apply isinf operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the isinf operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "isinf")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def isnan(*args, **kwargs):
-        """isnan docstring."""
+        """
+        Apply isnan operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the isnan operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "isnan")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def lcm(*args, **kwargs):
-        """lcm docstring."""
+        """
+        Apply lcm operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the lcm operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "lcm")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def ldexp(*args, **kwargs):
-        """ldexp docstring."""
+        """
+        Apply ldexp operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the ldexp operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "ldexp")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def left_shift(*args, **kwargs):
-        """left_shift docstring."""
+        """
+        Apply left_shift operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the left_shift operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "left_shift")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def less(*args, **kwargs):
-        """less docstring."""
+        """
+        Apply less operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the less operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "less")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def less_equal(*args, **kwargs):
-        """less_equal docstring."""
+        """
+        Apply less_equal operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the less_equal operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "less_equal")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def lgamma(*args, **kwargs):
-        """lgamma docstring."""
+        """
+        Apply lgamma operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the lgamma operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "lgamma")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def linalg(*args, **kwargs):
-        """linalg docstring."""
+        """
+        Apply linalg operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the linalg operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "linalg")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def linspace(*args, **kwargs):
-        """linspace docstring."""
+        """
+        Apply linspace operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the linspace operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "linspace")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def log(*args, **kwargs):
-        """log docstring."""
+        """
+        Apply log operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the log operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "log")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def log10(*args, **kwargs):
-        """log10 docstring."""
+        """
+        Apply log10 operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the log10 operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "log10")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def log1p(*args, **kwargs):
-        """log1p docstring."""
+        """
+        Apply log1p operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the log1p operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "log1p")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def log2(*args, **kwargs):
-        """log2 docstring."""
+        """
+        Apply log2 operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the log2 operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "log2")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def logaddexp(*args, **kwargs):
-        """logaddexp docstring."""
+        """
+        Apply logaddexp operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the logaddexp operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "logaddexp")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def logaddexp2(*args, **kwargs):
-        """logaddexp2 docstring."""
+        """
+        Apply logaddexp2 operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the logaddexp2 operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "logaddexp2")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def logical_and(*args, **kwargs):
-        """logical_and docstring."""
+        """
+        Apply logical_and operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the logical_and operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "logical_and")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def logical_not(*args, **kwargs):
-        """logical_not docstring."""
+        """
+        Apply logical_not operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the logical_not operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "logical_not")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def logical_or(*args, **kwargs):
-        """logical_or docstring."""
+        """
+        Apply logical_or operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the logical_or operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "logical_or")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def logical_xor(*args, **kwargs):
-        """logical_xor docstring."""
+        """
+        Apply logical_xor operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the logical_xor operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "logical_xor")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def logsumexp(*args, **kwargs):
-        """logsumexp docstring."""
+        """
+        Apply logsumexp operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the logsumexp operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "logsumexp")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def matmul(*args, **kwargs):
-        """matmul docstring."""
+        """
+        Apply matmul operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the matmul operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "matmul")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def matrix_power(*args, **kwargs):
-        """matrix_power docstring."""
+        """
+        Apply matrix_power operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the matrix_power operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "matrix_power")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def reduce_max(*args, **kwargs):
-        """reduce_max docstring."""
+        """
+        Apply reduce_max operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the reduce_max operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "max")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def maximum(*args, **kwargs):
-        """maximum docstring."""
+        """
+        Apply maximum operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the maximum operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "maximum")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def reduce_mean(*args, **kwargs):
-        """reduce_mean docstring."""
+        """
+        Apply reduce_mean operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the reduce_mean operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "mean")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def meshgrid(*args, **kwargs):
-        """meshgrid docstring."""
+        """
+        Apply meshgrid operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the meshgrid operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "meshgrid")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def reduce_min(*args, **kwargs):
-        """reduce_min docstring."""
+        """
+        Apply reduce_min operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the reduce_min operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "min")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def minimum(*args, **kwargs):
-        """minimum docstring."""
+        """
+        Apply minimum operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the minimum operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "minimum")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def mod(*args, **kwargs):
-        """mod docstring."""
+        """
+        Apply mod operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the mod operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "mod")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def moveaxis(*args, **kwargs):
-        """moveaxis docstring."""
+        """
+        Apply moveaxis operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the moveaxis operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "moveaxis")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def multiply(*args, **kwargs):
-        """multiply docstring."""
+        """
+        Apply multiply operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the multiply operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "multiply")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def negative(*args, **kwargs):
-        """negative docstring."""
+        """
+        Apply negative operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the negative operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "negative")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def nextafter(*args, **kwargs):
-        """nextafter docstring."""
+        """
+        Apply nextafter operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the nextafter operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "nextafter")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def norm(*args, **kwargs):
-        """norm docstring."""
+        """
+        Apply norm operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the norm operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "norm")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def not_equal(*args, **kwargs):
-        """not_equal docstring."""
+        """
+        Apply not_equal operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the not_equal operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "not_equal")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def ones(*args, **kwargs):
-        """ones docstring."""
+        """
+        Apply ones operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the ones operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "ones")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def ones_like(*args, **kwargs):
-        """ones_like docstring."""
+        """
+        Apply ones_like operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the ones_like operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "ones_like")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def outer(*args, **kwargs):
-        """outer docstring."""
+        """
+        Apply outer operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the outer operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "outer")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def permute(*args, **kwargs):
-        """permute docstring."""
+        """
+        Apply permute operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the permute operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "permute")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def pinv(*args, **kwargs):
-        """pinv docstring."""
+        """
+        Apply pinv operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the pinv operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "pinv")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def positive(*args, **kwargs):
-        """positive docstring."""
+        """
+        Apply positive operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the positive operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "positive")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def power(*args, **kwargs):
-        """power docstring."""
+        """
+        Apply power operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the power operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "power")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def prod(*args, **kwargs):
-        """prod docstring."""
+        """
+        Apply prod operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the prod operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "prod")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def qr(*args, **kwargs):
-        """qr docstring."""
+        """
+        Apply qr operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the qr operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "qr")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def rad2deg(*args, **kwargs):
-        """rad2deg docstring."""
+        """
+        Apply rad2deg operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the rad2deg operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "rad2deg")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def real(*args, **kwargs):
-        """real docstring."""
+        """
+        Apply real operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the real operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "real")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def reciprocal(*args, **kwargs):
-        """reciprocal docstring."""
+        """
+        Apply reciprocal operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the reciprocal operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "reciprocal")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def reductions(*args, **kwargs):
-        """reductions docstring."""
+        """
+        Apply reductions operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the reductions operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "reductions")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def remainder(*args, **kwargs):
-        """remainder docstring."""
+        """
+        Apply remainder operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the remainder operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "remainder")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def repeat(*args, **kwargs):
-        """repeat docstring."""
+        """
+        Apply repeat operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the repeat operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "repeat")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def reshape(*args, **kwargs):
-        """reshape docstring."""
+        """
+        Apply reshape operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the reshape operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "reshape")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def right_shift(*args, **kwargs):
-        """right_shift docstring."""
+        """
+        Apply right_shift operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the right_shift operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "right_shift")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def roll(*args, **kwargs):
-        """roll docstring."""
+        """
+        Apply roll operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the roll operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "roll")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def round(*args, **kwargs):
-        """round docstring."""
+        """
+        Apply round operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the round operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "round")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def rsqrt(*args, **kwargs):
-        """rsqrt docstring."""
+        """
+        Apply rsqrt operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the rsqrt operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "rsqrt")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def scatter(*args, **kwargs):
-        """scatter docstring."""
+        """
+        Apply scatter operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the scatter operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "scatter")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def scatter_add(*args, **kwargs):
-        """scatter_add docstring."""
+        """
+        Apply scatter_add operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the scatter_add operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "scatter_add")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def scatter_nd(*args, **kwargs):
-        """scatter_nd docstring."""
+        """
+        Apply scatter_nd operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the scatter_nd operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "scatter_nd")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def shape(*args, **kwargs):
-        """shape docstring."""
+        """
+        Get the shape of the tensor.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Any: The shape value.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "shape")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def sign(*args, **kwargs):
-        """sign docstring."""
+        """
+        Apply sign operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the sign operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "sign")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def sin(*args, **kwargs):
-        """sin docstring."""
+        """
+        Apply sin operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the sin operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "sin")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def sinc(*args, **kwargs):
-        """sinc docstring."""
+        """
+        Apply sinc operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the sinc operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "sinc")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def sinh(*args, **kwargs):
-        """sinh docstring."""
+        """
+        Apply sinh operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the sinh operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "sinh")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def slice(*args, **kwargs):
-        """slice docstring."""
+        """
+        Apply slice operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the slice operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "slice")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def slogdet(*args, **kwargs):
-        """slogdet docstring."""
+        """
+        Apply slogdet operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the slogdet operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "slogdet")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def split(*args, **kwargs):
-        """split docstring."""
+        """
+        Apply split operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the split operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "split")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def sqrt(*args, **kwargs):
-        """sqrt docstring."""
+        """
+        Apply sqrt operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the sqrt operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "sqrt")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def square(*args, **kwargs):
-        """square docstring."""
+        """
+        Apply square operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the square operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "square")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def squeeze(*args, **kwargs):
-        """squeeze docstring."""
+        """
+        Apply squeeze operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the squeeze operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "squeeze")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def stack(*args, **kwargs):
-        """stack docstring."""
+        """
+        Apply stack operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the stack operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "stack")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def std(*args, **kwargs):
-        """std docstring."""
+        """
+        Apply std operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the std operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "std")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def strided_slice(*args, **kwargs):
-        """strided_slice docstring."""
+        """
+        Apply strided_slice operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the strided_slice operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "strided_slice")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def subtract(*args, **kwargs):
-        """subtract docstring."""
+        """
+        Apply subtract operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the subtract operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "subtract")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def reduce_sum(*args, **kwargs):
-        """reduce_sum docstring."""
+        """
+        Apply reduce_sum operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the reduce_sum operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "sum")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def svd(*args, **kwargs):
-        """svd docstring."""
+        """
+        Apply svd operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the svd operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "svd")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def swapaxes(*args, **kwargs):
-        """swapaxes docstring."""
+        """
+        Apply swapaxes operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the swapaxes operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "swapaxes")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def take(*args, **kwargs):
-        """take docstring."""
+        """
+        Apply take operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the take operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "take")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def tan(*args, **kwargs):
-        """tan docstring."""
+        """
+        Apply tan operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the tan operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "tan")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def tanh(*args, **kwargs):
-        """tanh docstring."""
+        """
+        Apply tanh operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the tanh operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "tanh")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def tensordot(*args, **kwargs):
-        """tensordot docstring."""
+        """
+        Apply tensordot operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the tensordot operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "tensordot")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def tile(*args, **kwargs):
-        """tile docstring."""
+        """
+        Apply tile operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the tile operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "tile")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def transpose(*args, **kwargs):
-        """transpose docstring."""
+        """
+        Apply transpose operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the transpose operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "transpose")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def tril(*args, **kwargs):
-        """tril docstring."""
+        """
+        Apply tril operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the tril operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "tril")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def triu(*args, **kwargs):
-        """triu docstring."""
+        """
+        Apply triu operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the triu operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "triu")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def trunc(*args, **kwargs):
-        """trunc docstring."""
+        """
+        Apply trunc operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the trunc operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "trunc")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def unary(*args, **kwargs):
-        """unary docstring."""
+        """
+        Apply unary operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the unary operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "unary")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def unsqueeze(*args, **kwargs):
-        """unsqueeze docstring."""
+        """
+        Apply unsqueeze operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the unsqueeze operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "unsqueeze")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def unstack(*args, **kwargs):
-        """unstack docstring."""
+        """
+        Apply unstack operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the unstack operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "unstack")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def update_slice(*args, **kwargs):
-        """update_slice docstring."""
+        """
+        Apply update_slice operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the update_slice operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "update_slice")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def variance(*args, **kwargs):
-        """variance docstring."""
+        """
+        Apply variance operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the variance operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "variance")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def vdot(*args, **kwargs):
-        """vdot docstring."""
+        """
+        Apply vdot operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the vdot operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "vdot")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def where(*args, **kwargs):
-        """where docstring."""
+        """
+        Apply where operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the where operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "where")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def zeros(*args, **kwargs):
-        """zeros docstring."""
+        """
+        Apply zeros operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the zeros operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "zeros")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def zeros_like(*args, **kwargs):
-        """zeros_like docstring."""
+        """
+        Apply zeros_like operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the zeros_like operation.
+        """
         kwargs = {("axis" if k == "dim" else k): v for k, v in kwargs.items()}
         res = getattr(_ops, "zeros_like")(*[_to_tensor(a) for a in args], **kwargs)
         return _wrap(res)
 
     @staticmethod
     def pow(x, y):
-        """pow docstring."""
+        """
+        Apply pow operation.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            Tensor: The result of the pow operation.
+        """
         return _wrap(_ops.power(_to_tensor(x), _to_tensor(y)))
 
 
