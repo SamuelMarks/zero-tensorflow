@@ -8,11 +8,11 @@ sys.path.insert(
     ),
 )
 import pytest
-import ml_switcheroo
+import ml_switcheroo_compiler
 
 
 @pytest.fixture(autouse=True)
 def switcheroo_config():
     # Unified pytest configuration that imports switcheroo config contexts
-    with ml_switcheroo.EagerMode():
+    with ml_switcheroo_compiler.EagerMode():
         yield

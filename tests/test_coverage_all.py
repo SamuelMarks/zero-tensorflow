@@ -19,7 +19,7 @@ def test_math_coverage():
     # We will mock the ops so they don't fail internally
     with patch("zero_tensorflow._ops") as mock_ops:
         for method_name in math_methods:
-            # Tell mock_ops to return a dummy ml_switcheroo.Tensor for any attribute accessed
+            # Tell mock_ops to return a dummy ml_switcheroo_compiler.Tensor for any attribute accessed
             mock_method = getattr(mock_ops, method_name, None)
             if mock_method is not None:
                 mock_method.return_value = x._tensor

@@ -2,12 +2,12 @@ import sys
 import zero_tensorflow as tf
 import types
 import pytest
-import ml_switcheroo
+import ml_switcheroo_compiler
 
 
 @pytest.fixture(autouse=True)
 def switcheroo_config():
-    with ml_switcheroo.EagerMode():
+    with ml_switcheroo_compiler.EagerMode():
         yield
 
 

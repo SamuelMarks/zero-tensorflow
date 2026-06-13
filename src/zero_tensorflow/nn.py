@@ -1,7 +1,7 @@
 """TensorFlow nn module."""
 
 from typing import Optional, Any
-import ml_switcheroo.nn as _nn
+import ml_switcheroo_compiler.nn as _nn
 from . import Tensor, _to_tensor, _wrap
 
 __all__ = ["elu", "leaky_relu", "relu", "selu", "sigmoid", "softmax", "tanh"]
@@ -35,7 +35,20 @@ def elu(features: Any, *args: Any, name: Optional[str] = None, **kwargs: Any) ->
         Tensor: A Tensor representing the exponential linear function of the input.
     """
     _check_none(features)
-    return _wrap(_nn.elu(_to_tensor(features), *args, **kwargs))
+    t = _to_tensor(features)
+    alpha_t = _to_tensor(1.0, dtype=t.dtype)
+    from . import _ops
+
+    # elu = max(x, alpha * (exp(x) - 1))
+    # Or where(x > 0, x, alpha * (exp(x) - 1))
+    res = _ops.where(
+        _ops.greater(t, _to_tensor(0.0, dtype=t.dtype)),
+        t,
+        _ops.multiply(
+            alpha_t, _ops.subtract(_ops.exp(t), _to_tensor(1.0, dtype=t.dtype))
+        ),
+    )
+    return _wrap(res)
 
 
 def leaky_relu(
@@ -59,9 +72,11 @@ def leaky_relu(
         Tensor: A Tensor representing the Leaky ReLU activation of the input.
     """
     _check_none(features)
-    return _wrap(
-        _nn.leaky_relu(_to_tensor(features), negative_slope=alpha, *args, **kwargs)
-    )
+    t = _to_tensor(features)
+    alpha_t = _to_tensor(alpha, dtype=t.dtype)
+    from . import _ops
+
+    return _wrap(_ops.maximum(t, _ops.multiply(alpha_t, t)))
 
 
 def relu(
@@ -80,7 +95,10 @@ def relu(
         Tensor: A Tensor representing the rectified linear activation of the input.
     """
     _check_none(features)
-    return _wrap(_nn.relu(_to_tensor(features), *args, **kwargs))
+    t = _to_tensor(features)
+    from . import _ops
+
+    return _wrap(_ops.maximum(t, _to_tensor(0.0, dtype=t.dtype)))
 
 
 def selu(
@@ -100,18 +118,18 @@ def selu(
     """
     _check_none(features)
     t = _to_tensor(features)
-    from ml_switcheroo.core.config import config
+    from . import _ops
 
-    if config.eager_mode:
-        import numpy as np
-        from ml_switcheroo.core.tensor_utils import to_array
-
-        x = to_array(t)
-        scale = 1.0507009873554804934193349852946
-        alpha = 1.6732632423543772848170429916717
-        res = scale * np.where(x > 0.0, x, alpha * (np.exp(x) - 1.0))
-        return _wrap(_to_tensor(res))
-    return _wrap(_nn.selu(t, *args, **kwargs))
+    scale = _to_tensor(1.0507009873554804934193349852946, dtype=t.dtype)
+    alpha = _to_tensor(1.6732632423543772848170429916717, dtype=t.dtype)
+    res = _ops.where(
+        _ops.greater(t, _to_tensor(0.0, dtype=t.dtype)),
+        t,
+        _ops.multiply(
+            alpha, _ops.subtract(_ops.exp(t), _to_tensor(1.0, dtype=t.dtype))
+        ),
+    )
+    return _wrap(_ops.multiply(scale, res))
 
 
 def sigmoid(x: Any, *args: Any, name: Optional[str] = None, **kwargs: Any) -> Tensor:
@@ -155,17 +173,7 @@ def softmax(
     if axis is None:
         axis = -1
     t = _to_tensor(logits)
-    from ml_switcheroo.core.config import config
-
-    if config.eager_mode:
-        import numpy as np
-        from ml_switcheroo.core.tensor_utils import to_array
-
-        x = to_array(t)
-        e_x = np.exp(x - np.max(x, axis=axis, keepdims=True))
-        res = e_x / e_x.sum(axis=axis, keepdims=True)
-        return _wrap(_to_tensor(res))
-    return _wrap(_nn.softmax(t, dim=axis, *args, **kwargs))
+    return _wrap(_nn.softmax(t, axis=axis, *args, **kwargs))
 
 
 def tanh(x: Any, *args: Any, name: Optional[str] = None, **kwargs: Any) -> Tensor:
@@ -182,4 +190,6 @@ def tanh(x: Any, *args: Any, name: Optional[str] = None, **kwargs: Any) -> Tenso
         Tensor: A Tensor representing the hyperbolic tangent activation of the input.
     """
     _check_none(x)
-    return _wrap(_nn.tanh(_to_tensor(x), *args, **kwargs))
+    from . import _ops
+
+    return _wrap(_ops.tanh(_to_tensor(x), *args, **kwargs))

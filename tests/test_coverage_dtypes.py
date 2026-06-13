@@ -16,7 +16,7 @@ def test_tensor_dtypes():
     Tensor(np.array(1, dtype=np.int8))
     Tensor(np.array("test string"))  # hits the dt_str Exception
 
-    from ml_switcheroo.tracing import ProxyTensor
+    from ml_switcheroo_compiler.tracing import ProxyTensor
     from zero_tensorflow import _to_tensor
 
     pt = ProxyTensor("test", (), "float32")
