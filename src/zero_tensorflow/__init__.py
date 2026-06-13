@@ -3617,3 +3617,20 @@ class math:
 
 from . import data
 from . import nn
+
+
+class _Linalg:
+    """Linalg namespace."""
+
+    @staticmethod
+    def matmul(a, b, *args, **kwargs):
+        """Apply matmul operation."""
+        return math.matmul(a, b, *args, **kwargs)
+
+
+linalg = _Linalg()
+
+
+def tensordot(*args, **kwargs):
+    """Apply tensordot operation."""
+    return math.tensordot(*args, **kwargs)

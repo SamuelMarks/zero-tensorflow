@@ -6,6 +6,7 @@ from zero_tensorflow import (
     math,
     Tensor,
 )
+import zero_tensorflow as tf
 import numpy as np
 
 
@@ -89,8 +90,8 @@ def test_math():
 
     a = np.array([[1, 0], [0, 1]])
     b = np.array([[1, 2], [3, 4]])
-    assert np.array_equal(math.matmul(a, b).numpy(), b)
-    assert np.array_equal(math.tensordot(a, b, axes=1).numpy(), b)
+    assert np.array_equal(tf.linalg.matmul(a, b).numpy(), b)
+    assert np.array_equal(tf.tensordot(a, b, axes=1).numpy(), b)
 
 
 def test_tensor_magic_methods_eager():
@@ -160,8 +161,8 @@ def test_math_traced():
             math.reduce_mean(x),
             math.reduce_max(x),
             math.reduce_min(x),
-            math.matmul(a, b),
-            math.tensordot(a, b, axes=1),
+            tf.linalg.matmul(a, b),
+            tf.tensordot(a, b, axes=1),
         )
 
     x = Tensor(2.0)
