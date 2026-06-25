@@ -5,3 +5,6 @@ parameterized
 mock
 pytest-json-report
 numpy
+tensorflow-macos; sys_platform == 'darwin'
+tensorflow[and-cuda]; sys_platform == 'linux'
+tensorflow; sys_platform == 'win32'

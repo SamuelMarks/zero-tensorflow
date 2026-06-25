@@ -1,4 +1,4 @@
-from ml_switcheroo_compiler.core.tensor import Tensor
+from ml_switcheroo_compiler.core.tensor import Tensor, TensorConfig
 from ml_switcheroo_compiler.tracing import ProxyTensor
 from ml_switcheroo_compiler.ops import control_flow
 from ml_switcheroo_compiler.tracing import _tracer
@@ -14,7 +14,7 @@ def test_control_flow_tracing():
     prev_add = getattr(_tracer, "add_node", None)
 
     proxy_x = ProxyTensor("x_id", (2, 2), DType.Float32.value)
-    x = Tensor(proxy_x, (2, 2), DType.Float32, "cpu")
+    x = Tensor(proxy_x, TensorConfig(shape=(2, 2), dtype=DType.Float32, device="cpu"))
 
     try:
         _tracer.is_tracing = True

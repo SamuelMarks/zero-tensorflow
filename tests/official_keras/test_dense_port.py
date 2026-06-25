@@ -1,4 +1,3 @@
-import pytest
 import numpy as np
 from tensorflow.python.framework import test_util
 from tensorflow.keras import layers
@@ -6,9 +5,6 @@ from tensorflow.python.platform import test
 
 
 class DenseTest(test_util.TensorFlowTestCase):
-    @pytest.mark.skip(
-        reason="zero-keras is currently an API shell and does not implement core logic yet"
-    )
     def test_dense_correctness(self):
         # With bias and activation.
         layer = layers.Dense(
@@ -31,9 +27,6 @@ class DenseTest(test_util.TensorFlowTestCase):
 
         self.assertAllClose(outputs, expected_output)
 
-    @pytest.mark.skip(reason="pending")
-    @pytest.mark.skip(reason="pending")
-    @pytest.mark.skip(reason="pending")
     def test_dense_api_signature(self):
         layer = layers.Dense(units=2, activation="relu", use_bias=True)
         layer.build((1, 2))

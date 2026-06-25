@@ -8,7 +8,7 @@ ALLOWED_3RD_PARTY = {
     "pydantic",
     "cdd",  # for ../cdd-python, it's typically imported as cdd or similar?
     "ml_switcheroo_ir",  # ../ml-switcheroo-ir
-    "ml_switcheroo",  # ../ml-switcheroo-compiler
+    "ml_switcheroo_compiler",  # ../ml-switcheroo-compiler
     "zero_jax",  # ../zero-jax
     "zero_keras",  # ../zero-keras
 }

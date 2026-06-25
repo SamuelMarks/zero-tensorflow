@@ -32,11 +32,13 @@ def test_to_tensor_tracing():
     from ml_switcheroo_compiler.core.config import config
 
     # Create an eager ml_switcheroo.Tensor
+    from ml_switcheroo_compiler.core.tensor import TensorConfig
+
     t = ml_switcheroo_compiler.Tensor(
         np.array(1.0),
-        shape=(),
-        dtype=config.default_float_dtype,
-        device=config.default_device,
+        config=TensorConfig(
+            shape=(), dtype=config.default_float_dtype, device=config.default_device
+        ),
     )
     t_wrap = Tensor(t)
     del t_wrap._traced_node_ids
