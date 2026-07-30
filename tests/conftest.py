@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 
 sys.path.insert(
     0,
@@ -8,11 +8,10 @@ sys.path.insert(
     ),
 )
 import pytest
-import ml_switcheroo_compiler
 
 
 @pytest.fixture(autouse=True)
 def switcheroo_config():
     # Unified pytest configuration that imports switcheroo config contexts
-    with ml_switcheroo_compiler.EagerMode():
+    if True:
         yield

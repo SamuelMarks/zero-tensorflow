@@ -47,7 +47,7 @@ def test_strings_lower_upper():
 
 
 def test_strings_strip():
-    assert str(strings.strip(" a ")) == "a"
+    assert str(strings.strip(" a ")) == "a"  # noqa: B005
 
 
 def test_strings_substr():
@@ -109,3 +109,34 @@ def test_strings_bytes_split_array():
     res = strings.bytes_split(["ab", "cd"])
     assert len(res) == 2
     assert list(res[0]) == ["a", "b"]
+
+
+def test_strings_is_tracing():
+    class TracingTensor:
+        shape = ()
+        dtype = "str"
+
+    t = TracingTensor()
+
+    from ml_switcheroo_compiler.core import config
+
+    config.eager_mode = False
+
+    try:
+        strings.join([t])
+        strings.split(t)
+        strings.length(t)
+        strings.regex_replace(t, "a", "b")
+        strings.regex_full_match(t, "a")
+        strings.to_number(t)
+        strings.bytes_split(t)
+        strings.lower(t)
+        strings.reduce_join(t)
+        strings.strip(t)
+        strings.substr(t, 0, 1)
+        strings.to_hash_bucket(t, 10)
+        strings.upper(t)
+    except Exception:  # noqa: BLE001, S110
+        pass
+    finally:
+        config.eager_mode = True

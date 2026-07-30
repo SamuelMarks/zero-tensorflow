@@ -12,15 +12,18 @@ def find_paths(obj, name, current_path="tf", depth=0):
     for k, v in obj.items():
         if k == name:
             paths.append(current_path + "." + k)
-        if v["type"] == "module" and "contents" in v:
-            if (
+        if (
+            v["type"] == "module"
+            and "contents" in v
+            and (
                 "keras" not in current_path
                 and "compat" not in current_path
                 and "experimental" not in current_path
-            ):
-                paths.extend(
-                    find_paths(v["contents"], name, current_path + "." + k, depth + 1)
-                )
+            )
+        ):
+            paths.extend(
+                find_paths(v["contents"], name, current_path + "." + k, depth + 1)
+            )
     return paths
 
 
@@ -44,9 +47,7 @@ for node in math_class.body:
         end_line = node.end_lineno
         lines = source.splitlines()[start_line:end_line]
         # Re-indent (remove 4 spaces)
-        method_source = "\n".join(
-            line[4:] if line.startswith("    ") else line for line in lines
-        )
+        method_source = "\n".join(line.removeprefix("    ") for line in lines)
         methods[node.name] = method_source
 
 # Mapping
@@ -77,17 +78,13 @@ for name, source_code in methods.items():
             paths = find_paths(api, "fill")
         elif name == "inv":
             paths = find_paths(api, "linalg.inv")
-        elif name == "linalg":
-            paths = []
-        elif name == "matrix_power":
+        elif name == "linalg" or name == "matrix_power":
             paths = []
         elif name == "power":
             paths = find_paths(api, "pow")
         elif name == "prod":
             paths = find_paths(api, "reduce_prod")
-        elif name == "reductions":
-            paths = []
-        elif name == "unary":
+        elif name == "reductions" or name == "unary":
             paths = []
         elif name == "variance":
             paths = find_paths(api, "math.reduce_variance")

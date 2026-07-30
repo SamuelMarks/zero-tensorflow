@@ -9,4 +9,4 @@ class experimental:
     @staticmethod
     def sync_devices(*args: Any, **kwargs: Any) -> None:
         """Stub for sync_devices."""
-        raise NotImplementedError("Not implemented: sync_devices")
+        return

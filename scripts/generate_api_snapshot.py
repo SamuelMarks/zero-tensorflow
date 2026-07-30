@@ -1,12 +1,13 @@
-import json
 import inspect
+import json
+
 import tensorflow as tf
 
 
 def safe_name(obj):
     try:
         return obj.__name__
-    except Exception:
+    except Exception:  # noqa: BLE001
         return ""
 
 

@@ -4,7 +4,7 @@ from tensorflow.python.platform import test
 
 class SequentialTest(test_util.TensorFlowTestCase):
     def test_sequential_basic(self):
-        from tensorflow.keras import models, layers
+        from tensorflow.keras import layers, models
 
         model = models.Sequential([layers.Dense(2, activation="relu"), layers.Dense(1)])
 

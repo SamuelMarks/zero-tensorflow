@@ -10,10 +10,10 @@ class experimental:
         """Stub for DenseHashTable."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: DenseHashTable")
+            pass
 
     class MutableHashTable:
         """Stub for MutableHashTable."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: MutableHashTable")
+            return None

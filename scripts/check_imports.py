@@ -1,16 +1,14 @@
 import ast
-import sys
 import glob
+import sys
 
 # Allowed 3rd party dependencies based on the rule
 ALLOWED_3RD_PARTY = {
-    "numpy",
     "pydantic",
-    "cdd",  # for ../cdd-python, it's typically imported as cdd or similar?
-    "ml_switcheroo_ir",  # ../ml-switcheroo-ir
-    "ml_switcheroo_compiler",  # ../ml-switcheroo-compiler
-    "zero_jax",  # ../zero-jax
-    "zero_keras",  # ../zero-keras
+    "cdd",
+    "ml_switcheroo_ir",
+    "ml_switcheroo_compiler",
+    "zero_keras",
 }
 
 # Standard library modules (a reasonably comprehensive set for typical use cases to avoid false positives)
@@ -29,10 +27,10 @@ def is_stdlib(module_name):
 
         spec = importlib.util.find_spec(module_name)
         if spec is not None and spec.origin is not None:
-            if "site-packages" in spec.origin or "dist-packages" in spec.origin:
-                return False
-            return True
-    except Exception:
+            return not (
+                "site-packages" in spec.origin or "dist-packages" in spec.origin
+            )
+    except Exception:  # noqa: BLE001, S110
         pass
 
     return False
@@ -96,17 +94,68 @@ def check_file(filepath):
 
     disallowed = []
 
+    def verify_module(lineno, name):
+        if name is None:
+            disallowed.append((lineno, "dynamic_import"))
+            return
+
+        base_module = name.split(".")[0]
+        if not check_module(base_module):
+            disallowed.append((lineno, name))
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for name in node.names:
-                base_module = name.name.split(".")[0]
-                if not check_module(base_module):
-                    disallowed.append((node.lineno, name.name))
+                verify_module(node.lineno, name.name)
         elif isinstance(node, ast.ImportFrom):
             if node.module is not None and node.level == 0:  # not relative
-                base_module = node.module.split(".")[0]
-                if not check_module(base_module):
-                    disallowed.append((node.lineno, node.module))
+                verify_module(node.lineno, node.module)
+        elif isinstance(node, ast.Call):
+            if (
+                (isinstance(node.func, ast.Name) and node.func.id == "__import__")
+                or (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "__import__"
+                )
+                or (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "import_module"
+                )
+                or (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "get"
+                    and isinstance(node.func.value, ast.Attribute)
+                    and node.func.value.attr == "modules"
+                    and isinstance(node.func.value.value, ast.Name)
+                    and node.func.value.value.id == "sys"
+                )
+            ):
+                if (
+                    node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)
+                ):
+                    verify_module(node.lineno, node.args[0].value)
+                else:
+                    verify_module(node.lineno, None)
+
+        elif (
+            isinstance(node, ast.Subscript)
+            and (
+                isinstance(node.value, ast.Attribute)
+                and node.value.attr == "modules"
+                and isinstance(node.value.value, ast.Name)
+                and node.value.value.id == "sys"
+            )
+            and isinstance(node.ctx, ast.Load)
+        ):
+            if isinstance(node.slice, ast.Constant) and isinstance(
+                node.slice.value, str
+            ):
+                verify_module(node.lineno, node.slice.value)
+            else:
+                verify_module(node.lineno, None)
+
     return disallowed
 
 
@@ -122,10 +171,7 @@ def check_module(base_module):
         return True
 
     # Check dynamically if it's stdlib
-    if is_stdlib(base_module):
-        return True
-
-    return False
+    return bool(is_stdlib(base_module))
 
 
 def main():

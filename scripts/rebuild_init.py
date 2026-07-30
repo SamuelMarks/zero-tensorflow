@@ -127,10 +127,7 @@ for name, method_src in methods.items():
             new_src = new_src.replace("    @staticmethod\n", "")
             new_src = new_src.replace("@staticmethod\n", "")
             new_src = (
-                "\n".join(
-                    line[4:] if line.startswith("    ") else line
-                    for line in new_src.splitlines()
-                )
+                "\n".join(line.removeprefix("    ") for line in new_src.splitlines())
                 + "\n"
             )
             out_modules["top_level"][func_name] = new_src

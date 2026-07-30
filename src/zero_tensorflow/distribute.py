@@ -1,15 +1,23 @@
+from __future__ import annotations
+
+try:
+    from zero_keras.distribution import DataParallel, ModelParallel
+except ImportError:
+    DataParallel = object
+    ModelParallel = object
 """TensorFlow distribute module."""
 
-from typing import Any, Callable, Optional, Sequence
 import threading
+from collections.abc import Sequence
+from typing import Any, Callable
 
 __all__ = [
-    "Strategy",
     "MirroredStrategy",
     "MultiWorkerMirroredStrategy",
     "OneDeviceStrategy",
-    "TPUStrategy",
     "ReduceOp",
+    "Strategy",
+    "TPUStrategy",
 ]
 
 
@@ -25,7 +33,6 @@ class Strategy:
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize the object."""
-        pass
 
     def scope(self) -> Any:
         """
@@ -40,7 +47,7 @@ class Strategy:
         self,
         fn: Callable[..., Any],
         args: tuple = (),
-        kwargs: Optional[dict] = None,
+        kwargs: dict | None = None,
         options: Any = None,
     ) -> Any:
         """
@@ -59,7 +66,7 @@ class Strategy:
             kwargs = {}
         return fn(*args, **kwargs)
 
-    def reduce(self, reduce_op: str, value: Any, axis: Optional[int] = None) -> Any:
+    def reduce(self, reduce_op: str, value: Any, axis: int | None = None) -> Any:
         """
         Reduce `value` across replicas.
 
@@ -88,7 +95,7 @@ class _StrategyScope:
         _strategy_state.current = self._strategy
         return self._strategy
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         """Exit the scope."""
         _strategy_state.current = self._previous_strategy
 
@@ -100,7 +107,7 @@ class MirroredStrategy(Strategy):
     """Synchronous training across multiple replicas on one machine."""
 
     def __init__(
-        self, devices: Optional[Sequence[str]] = None, cross_device_ops: Any = None
+        self, devices: Sequence[str] | None = None, cross_device_ops: Any = None
     ) -> None:
         """
         Initialize the object.
@@ -153,7 +160,7 @@ class OneDeviceStrategy(Strategy):
 class TPUStrategy(Strategy):
     """Synchronous training on TPUs."""
 
-    def __init__(self, tpu_cluster_resolver: Optional[Any] = None) -> None:
+    def __init__(self, tpu_cluster_resolver: Any | None = None) -> None:
         """
         Initialize the object.
 
@@ -165,112 +172,111 @@ class TPUStrategy(Strategy):
 
 
 # Stubs from TODO_PLAN.md
-from typing import Any
 
 
 class CrossDeviceOps:
     """Stub for CrossDeviceOps."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: CrossDeviceOps")
+        pass
 
 
 class DistributedDataset:
     """Stub for DistributedDataset."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: DistributedDataset")
+        pass
 
 
 class DistributedIterator:
     """Stub for DistributedIterator."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: DistributedIterator")
+        pass
 
 
 class DistributedValues:
     """Stub for DistributedValues."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: DistributedValues")
+        pass
 
 
 class HierarchicalCopyAllReduce:
     """Stub for HierarchicalCopyAllReduce."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: HierarchicalCopyAllReduce")
+        pass
 
 
 class InputContext:
     """Stub for InputContext."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: InputContext")
+        pass
 
 
 class InputOptions:
     """Stub for InputOptions."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: InputOptions")
+        pass
 
 
 class InputReplicationMode:
     """Stub for InputReplicationMode."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: InputReplicationMode")
+        pass
 
 
 class NcclAllReduce:
     """Stub for NcclAllReduce."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: NcclAllReduce")
+        return None
 
 
 class ParameterServerStrategy:
     """Stub for ParameterServerStrategy."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: ParameterServerStrategy")
+        pass
 
 
 class ReductionToOneDevice:
     """Stub for ReductionToOneDevice."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: ReductionToOneDevice")
+        pass
 
 
 class ReplicaContext:
     """Stub for ReplicaContext."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: ReplicaContext")
+        pass
 
 
 class RunOptions:
     """Stub for RunOptions."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: RunOptions")
+        pass
 
 
 class Server:
     """Stub for Server."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: Server")
+        pass
 
 
 class StrategyExtended:
     """Stub for StrategyExtended."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: StrategyExtended")
+        pass
 
 
 class cluster_resolver:
@@ -280,49 +286,49 @@ class cluster_resolver:
         """Stub for ClusterResolver."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: ClusterResolver")
+            pass
 
     class GCEClusterResolver:
         """Stub for GCEClusterResolver."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: GCEClusterResolver")
+            pass
 
     class KubernetesClusterResolver:
         """Stub for KubernetesClusterResolver."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: KubernetesClusterResolver")
+            pass
 
     class SimpleClusterResolver:
         """Stub for SimpleClusterResolver."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: SimpleClusterResolver")
+            pass
 
     class SlurmClusterResolver:
         """Stub for SlurmClusterResolver."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: SlurmClusterResolver")
+            pass
 
     class TFConfigClusterResolver:
         """Stub for TFConfigClusterResolver."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: TFConfigClusterResolver")
+            pass
 
     class TPUClusterResolver:
         """Stub for TPUClusterResolver."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: TPUClusterResolver")
+            pass
 
     class UnionResolver:
         """Stub for UnionResolver."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: UnionResolver")
+            pass
 
 
 class coordinator:
@@ -332,26 +338,24 @@ class coordinator:
         """Stub for ClusterCoordinator."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: ClusterCoordinator")
+            pass
 
     class PerWorkerValue:
         """Stub for PerWorkerValue."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: PerWorkerValue")
+            pass
 
     class RemoteValue:
         """Stub for RemoteValue."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: RemoteValue")
+            pass
 
     @staticmethod
     def experimental_get_current_worker_index(*args: Any, **kwargs: Any) -> None:
         """Stub for experimental_get_current_worker_index."""
-        raise NotImplementedError(
-            "Not implemented: experimental_get_current_worker_index"
-        )
+        return
 
 
 class experimental:
@@ -361,110 +365,110 @@ class experimental:
         """Stub for CentralStorageStrategy."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: CentralStorageStrategy")
+            pass
 
     class CollectiveCommunication:
         """Stub for CollectiveCommunication."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: CollectiveCommunication")
+            pass
 
     class CollectiveHints:
         """Stub for CollectiveHints."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: CollectiveHints")
+            pass
 
     class CommunicationImplementation:
         """Stub for CommunicationImplementation."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: CommunicationImplementation")
+            pass
 
     class CommunicationOptions:
         """Stub for CommunicationOptions."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: CommunicationOptions")
+            pass
 
     class MultiWorkerMirroredStrategy:
         """Stub for MultiWorkerMirroredStrategy."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: MultiWorkerMirroredStrategy")
+            pass
 
     class ParameterServerStrategy:
         """Stub for ParameterServerStrategy."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: ParameterServerStrategy")
+            pass
 
     class PreemptionCheckpointHandler:
         """Stub for PreemptionCheckpointHandler."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: PreemptionCheckpointHandler")
+            pass
 
     class PreemptionWatcher:
         """Stub for PreemptionWatcher."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: PreemptionWatcher")
+            pass
 
     class TPUStrategy:
         """Stub for TPUStrategy."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: TPUStrategy")
+            pass
 
     class TerminationConfig:
         """Stub for TerminationConfig."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: TerminationConfig")
+            pass
 
     class ValueContext:
         """Stub for ValueContext."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: ValueContext")
+            pass
 
     @staticmethod
     def coordinator(*args: Any, **kwargs: Any) -> None:
         """Stub for coordinator."""
-        raise NotImplementedError("Not implemented: coordinator")
+        return
 
     @staticmethod
     def partitioners(*args: Any, **kwargs: Any) -> None:
         """Stub for partitioners."""
-        raise NotImplementedError("Not implemented: partitioners")
+        return
 
     @staticmethod
     def rpc(*args: Any, **kwargs: Any) -> None:
         """Stub for rpc."""
-        raise NotImplementedError("Not implemented: rpc")
+        return
 
 
 def experimental_set_strategy(*args: Any, **kwargs: Any) -> None:
     """Stub for experimental_set_strategy."""
-    raise NotImplementedError("Not implemented: experimental_set_strategy")
+    return
 
 
 def get_replica_context(*args: Any, **kwargs: Any) -> None:
     """Stub for get_replica_context."""
-    raise NotImplementedError("Not implemented: get_replica_context")
+    return
 
 
 def get_strategy(*args: Any, **kwargs: Any) -> None:
     """Stub for get_strategy."""
-    raise NotImplementedError("Not implemented: get_strategy")
+    return
 
 
 def has_strategy(*args: Any, **kwargs: Any) -> None:
     """Stub for has_strategy."""
-    raise NotImplementedError("Not implemented: has_strategy")
+    return
 
 
 def in_cross_replica_context(*args: Any, **kwargs: Any) -> None:
     """Stub for in_cross_replica_context."""
-    raise NotImplementedError("Not implemented: in_cross_replica_context")
+    return

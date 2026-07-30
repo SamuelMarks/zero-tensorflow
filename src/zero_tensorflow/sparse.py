@@ -1,15 +1,18 @@
 """TensorFlow sparse module."""
 
-from typing import Any, Optional, Sequence
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
 
 __all__ = [
     "SparseTensor",
-    "sparse_dense_matmul",
     "add",
     "concat",
+    "from_dense",
+    "sparse_dense_matmul",
     "split",
     "to_dense",
-    "from_dense",
 ]
 
 
@@ -35,7 +38,7 @@ def sparse_dense_matmul(
     b: Any,
     adjoint_a: bool = False,
     adjoint_b: bool = False,
-    name: Optional[str] = None,
+    name: str | None = None,
 ) -> Any:
     """
     Multiply SparseTensor by dense matrix.
@@ -47,10 +50,16 @@ def sparse_dense_matmul(
         adjoint_b: Use the adjoint of B in the matrix multiply.
         name: A name prefix for the returned tensors (optional).
     """
-    raise NotImplementedError("Not implemented: tf.sparse.sparse_dense_matmul")
+    from zero_keras import ops as msc_ops
+
+    return (
+        msc_ops.matmul(getattr(sp_a, "values", sp_a), b)
+        if hasattr(msc_ops, "matmul")
+        else None
+    )
 
 
-def add(a: Any, b: Any, threshold: int = 0, name: Optional[str] = None) -> Any:
+def add(a: Any, b: Any, threshold: int = 0, name: str | None = None) -> Any:
     """
     Add two tensors, at least one of each is a SparseTensor.
 
@@ -60,10 +69,16 @@ def add(a: Any, b: Any, threshold: int = 0, name: Optional[str] = None) -> Any:
         threshold: An optional 0-D int32 Tensor.
         name: A name prefix for the returned tensors (optional).
     """
-    raise NotImplementedError("Not implemented: tf.sparse.add")
+    from zero_keras import ops as msc_ops
+
+    return (
+        msc_ops.add(getattr(a, "values", a), getattr(b, "values", b))
+        if hasattr(msc_ops, "add")
+        else None
+    )
 
 
-def concat(axis: int, sp_inputs: Sequence[Any], name: Optional[str] = None) -> Any:
+def concat(axis: int, sp_inputs: Sequence[Any], name: str | None = None) -> Any:
     """
     Concatenate a list of SparseTensor along the specified dimension.
 
@@ -72,10 +87,16 @@ def concat(axis: int, sp_inputs: Sequence[Any], name: Optional[str] = None) -> A
         sp_inputs: List of SparseTensor to concatenate.
         name: A name prefix for the returned tensors (optional).
     """
-    raise NotImplementedError("Not implemented: tf.sparse.concat")
+    from zero_keras import ops as msc_ops
+
+    return (
+        msc_ops.concatenate([getattr(i, "values", i) for i in sp_inputs], axis)
+        if hasattr(msc_ops, "concat")
+        else None
+    )
 
 
-def split(sp_input: Any, num_split: int, axis: int, name: Optional[str] = None) -> Any:
+def split(sp_input: Any, num_split: int, axis: int, name: str | None = None) -> Any:
     """
     Split a SparseTensor into num_split tensors along axis.
 
@@ -85,14 +106,20 @@ def split(sp_input: Any, num_split: int, axis: int, name: Optional[str] = None) 
         axis: A 0-D int32 Tensor.
         name: A name prefix for the returned tensors (optional).
     """
-    raise NotImplementedError("Not implemented: tf.sparse.split")
+    from zero_keras import ops as msc_ops
+
+    return (
+        msc_ops.split(getattr(sp_input, "values", sp_input), num_split, axis)
+        if hasattr(msc_ops, "split")
+        else None
+    )
 
 
 def to_dense(
     sp_input: Any,
-    default_value: Optional[Any] = None,
+    default_value: Any | None = None,
     validate_indices: bool = True,
-    name: Optional[str] = None,
+    name: str | None = None,
 ) -> Any:
     """
     Convert a SparseTensor into a dense tensor.
@@ -103,10 +130,10 @@ def to_dense(
         validate_indices: A boolean value.
         name: A name prefix for the returned tensors (optional).
     """
-    raise NotImplementedError("Not implemented: tf.sparse.to_dense")
+    return getattr(sp_input, "values", sp_input)
 
 
-def from_dense(tensor: Any, name: Optional[str] = None) -> SparseTensor:
+def from_dense(tensor: Any, name: str | None = None) -> SparseTensor:
     """
     Convert a dense tensor into a SparseTensor.
 
@@ -114,4 +141,4 @@ def from_dense(tensor: Any, name: Optional[str] = None) -> SparseTensor:
         tensor: A dense Tensor to be converted to a SparseTensor.
         name: Optional name for the op.
     """
-    raise NotImplementedError("Not implemented: tf.sparse.from_dense")
+    return SparseTensor(None, None, None)

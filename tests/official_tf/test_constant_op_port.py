@@ -1,7 +1,6 @@
-from tensorflow.python.framework import constant_op
-from tensorflow.python.framework import test_util
-from tensorflow.python.platform import test
 import numpy as np
+from tensorflow.python.framework import constant_op, test_util
+from tensorflow.python.platform import test
 
 
 class ConstantOpTest(test_util.TensorFlowTestCase):

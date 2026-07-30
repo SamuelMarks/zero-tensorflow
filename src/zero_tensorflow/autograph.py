@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from ml_switcheroo_compiler.tracing.autograph import do_not_convert, set_loop_options
+
 
 class experimental:
     """Stub for experimental module."""
@@ -10,14 +12,14 @@ class experimental:
         """Stub for Feature."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: Feature")
+            pass
 
     @staticmethod
-    def do_not_convert(*args: Any, **kwargs: Any) -> None:
-        """Stub for do_not_convert."""
-        raise NotImplementedError("Not implemented: do_not_convert")
+    def do_not_convert(func: Any = None) -> Any:
+        """do_not_convert."""
+        return do_not_convert(func)
 
     @staticmethod
     def set_loop_options(*args: Any, **kwargs: Any) -> None:
-        """Stub for set_loop_options."""
-        raise NotImplementedError("Not implemented: set_loop_options")
+        """set_loop_options."""
+        return set_loop_options(*args, **kwargs)

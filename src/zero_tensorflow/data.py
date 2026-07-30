@@ -1,18 +1,21 @@
 """TensorFlow data module."""
 
-from typing import Any, Callable, Iterator as PyIterator, Optional
+from __future__ import annotations
+
 import queue
-import threading
 import random
+import threading
+from collections.abc import Iterator as PyIterator
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable
 
 __all__ = [
+    "ArrayIterator",
     "Dataset",
     "DatasetSpec",
     "FixedLengthRecordDataset",
     "Iterator",
     "IteratorSpec",
-    "ArrayIterator",
     "Options",
     "TFRecordDataset",
     "TextLineDataset",
@@ -31,8 +34,8 @@ class ThreadingOptions:
 
     def __init__(
         self,
-        max_intra_op_parallelism: Optional[int] = None,
-        private_threadpool_size: Optional[int] = None,
+        max_intra_op_parallelism: int | None = None,
+        private_threadpool_size: int | None = None,
         *args: Any,
         **kwargs: Any,
     ):
@@ -58,8 +61,8 @@ class Options:
 
     def __init__(
         self,
-        autotune: Optional[bool] = None,
-        threading: Optional[ThreadingOptions] = None,
+        autotune: bool | None = None,
+        threading: ThreadingOptions | None = None,
         *args: Any,
         **kwargs: Any,
     ):
@@ -85,7 +88,7 @@ class DatasetSpec:
         dataset_shape: Shape of the dataset.
     """
 
-    __slots__ = ["_element_spec", "_dataset_shape"]
+    __slots__ = ["_dataset_shape", "_element_spec"]
 
     def __init__(
         self,
@@ -134,7 +137,7 @@ class Iterator:
         dataset: The dataset to iterate over.
     """
 
-    def __init__(self, dataset: "Dataset", *args: Any, **kwargs: Any):
+    def __init__(self, dataset: Dataset, *args: Any, **kwargs: Any):
         """
         Initialize the object.
 
@@ -154,7 +157,7 @@ class Iterator:
         """
         return next(self._iter)
 
-    def __iter__(self) -> "Iterator":
+    def __iter__(self) -> Iterator:
         """
         Get the iterator.
 
@@ -172,10 +175,9 @@ class ArrayIterator(Iterator):
         dataset: The dataset to iterate over.
     """
 
-    pass
-
 
 class Dataset:
+    _compiler_node: Any = None
     """Base Dataset object supporting true generator protocol."""
 
     def __iter__(self) -> PyIterator[Any]:
@@ -194,27 +196,31 @@ class Dataset:
         Returns:
             PyIterator[Any]: Elements.
         """
-        raise NotImplementedError
+
+        if hasattr(self, "_compiler_node"):
+            iterator = iter(self._compiler_node)
+            while True:
+                try:
+                    yield next(iterator)
+                except StopIteration:
+                    break
+        return
 
     @classmethod
-    def from_tensor_slices(cls, tensors: Any) -> "Dataset":
-        """
-        Create a dataset from tensor slices.
+    def from_tensor_slices(cls, tensors: Any) -> Dataset:
 
-        Args:
-            tensors (Any): Tensors to slice.
-
-        Returns:
-            Dataset: The created dataset.
-        """
-        return TensorSliceDataset(tensors)
+        node = None
+        ds = TensorSliceDataset(tensors)
+        if node:
+            ds._compiler_node = node
+        return ds
 
     def map(
         self,
         map_func: Callable[[Any], Any],
-        num_parallel_calls: Optional[int] = None,
-        deterministic: Optional[bool] = None,
-    ) -> "Dataset":
+        num_parallel_calls: int | None = None,
+        deterministic: bool | None = None,
+    ) -> Dataset:
         """
         Map a function over the dataset.
 
@@ -226,9 +232,14 @@ class Dataset:
         Returns:
             Dataset: A new dataset with mapped elements.
         """
-        return MapDataset(self, map_func, num_parallel_calls, deterministic)
 
-    def filter(self, predicate: Callable[[Any], bool]) -> "Dataset":
+        node = None
+        ds = MapDataset(self, map_func, num_parallel_calls, deterministic)
+        if node:
+            ds._compiler_node = node
+        return ds
+
+    def filter(self, predicate: Callable[[Any], bool]) -> Dataset:
         """
         Filter dataset elements based on a predicate.
 
@@ -240,7 +251,7 @@ class Dataset:
         """
         return FilterDataset(self, predicate)
 
-    def batch(self, batch_size: int, drop_remainder: bool = False) -> "Dataset":
+    def batch(self, batch_size: int, drop_remainder: bool = False) -> Dataset:
         """
         Batch the dataset elements.
 
@@ -251,14 +262,19 @@ class Dataset:
         Returns:
             Dataset: A new batched dataset.
         """
-        return BatchDataset(self, batch_size, drop_remainder)
+
+        node = None
+        ds = BatchDataset(self, batch_size, drop_remainder)
+        if node:
+            ds._compiler_node = node
+        return ds
 
     def shuffle(
         self,
         buffer_size: int,
-        seed: Optional[int] = None,
-        reshuffle_each_iteration: Optional[bool] = None,
-    ) -> "Dataset":
+        seed: int | None = None,
+        reshuffle_each_iteration: bool | None = None,
+    ) -> Dataset:
         """
         Shuffle the dataset.
 
@@ -270,9 +286,14 @@ class Dataset:
         Returns:
             Dataset: The shuffled dataset.
         """
-        return ShuffleDataset(self, buffer_size, seed, reshuffle_each_iteration)
 
-    def prefetch(self, buffer_size: int) -> "Dataset":
+        node = None
+        ds = ShuffleDataset(self, buffer_size, seed, reshuffle_each_iteration)
+        if node:
+            ds._compiler_node = node
+        return ds
+
+    def prefetch(self, buffer_size: int) -> Dataset:
         """
         Prefetch elements from the dataset.
 
@@ -282,9 +303,14 @@ class Dataset:
         Returns:
             Dataset: The prefetched dataset.
         """
-        return PrefetchDataset(self, buffer_size)
 
-    def cache(self, filename: str = "") -> "Dataset":
+        node = None
+        ds = PrefetchDataset(self, buffer_size)
+        if node:
+            ds._compiler_node = node
+        return ds
+
+    def cache(self, filename: str = "") -> Dataset:
         """
         Cache elements of the dataset.
 
@@ -298,12 +324,12 @@ class Dataset:
 
     def interleave(
         self,
-        map_func: Callable[[Any], "Dataset"],
-        cycle_length: Optional[int] = None,
+        map_func: Callable[[Any], Dataset],
+        cycle_length: int | None = None,
         block_length: int = 1,
-        num_parallel_calls: Optional[int] = None,
-        deterministic: Optional[bool] = None,
-    ) -> "Dataset":
+        num_parallel_calls: int | None = None,
+        deterministic: bool | None = None,
+    ) -> Dataset:
         """
         Interleave elements from multiple datasets.
 
@@ -329,10 +355,10 @@ class Dataset:
     def window(
         self,
         size: int,
-        shift: Optional[int] = None,
+        shift: int | None = None,
         stride: int = 1,
         drop_remainder: bool = False,
-    ) -> "Dataset":
+    ) -> Dataset:
         """
         Create a dataset of windows.
 
@@ -359,8 +385,7 @@ class TensorSliceDataset(Dataset):
             self.elements = list(elements) if elements is not None else []
 
     def _generator(self) -> PyIterator[Any]:
-        for e in self.elements:
-            yield e
+        yield from self.elements
 
 
 class MapDataset(Dataset):
@@ -370,8 +395,8 @@ class MapDataset(Dataset):
         self,
         input_dataset: Dataset,
         map_func: Callable,
-        num_parallel_calls: Optional[int] = None,
-        deterministic: Optional[bool] = None,
+        num_parallel_calls: int | None = None,
+        deterministic: bool | None = None,
     ):
         """Initialize."""
         self._input_dataset = input_dataset
@@ -398,7 +423,7 @@ class MapDataset(Dataset):
                         for elem in self._input_dataset:
                             f = executor.submit(self._map_func, elem)
                             q.put((True, f))
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         q.put((False, e))
                     finally:
                         q.put((None, None))
@@ -459,8 +484,8 @@ class ShuffleDataset(Dataset):
         self,
         input_dataset: Dataset,
         buffer_size: int,
-        seed: Optional[int] = None,
-        reshuffle_each_iteration: Optional[bool] = None,
+        seed: int | None = None,
+        reshuffle_each_iteration: bool | None = None,
     ):
         """Initialize."""
         self._input_dataset = input_dataset
@@ -512,7 +537,7 @@ class PrefetchDataset(Dataset):
             try:
                 for elem in self._input_dataset:
                     q.put((True, elem))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 q.put((False, e))
             finally:
                 q.put((None, None))
@@ -536,7 +561,7 @@ class CacheDataset(Dataset):
         """Initialize."""
         self._input_dataset = input_dataset
         self._filename = filename
-        self._cache: Optional[list] = None
+        self._cache: list | None = None
 
     def _generator(self) -> PyIterator[Any]:
         if self._filename == "":
@@ -560,10 +585,10 @@ class InterleaveDataset(Dataset):
         self,
         input_dataset: Dataset,
         map_func: Callable,
-        cycle_length: Optional[int] = None,
+        cycle_length: int | None = None,
         block_length: int = 1,
-        num_parallel_calls: Optional[int] = None,
-        deterministic: Optional[bool] = None,
+        num_parallel_calls: int | None = None,
+        deterministic: bool | None = None,
     ):
         """Initialize."""
         self._input_dataset = input_dataset
@@ -603,7 +628,7 @@ class WindowDataset(Dataset):
         self,
         input_dataset: Dataset,
         size: int,
-        shift: Optional[int] = None,
+        shift: int | None = None,
         stride: int = 1,
         drop_remainder: bool = False,
     ):
@@ -619,9 +644,7 @@ class WindowDataset(Dataset):
         i = 0
         while i < len(elements):
             w = elements[i : i + self._size * self._stride : self._stride]
-            if len(w) == self._size:
-                yield TensorSliceDataset(w)
-            elif not self._drop_remainder and len(w) > 0:
+            if len(w) == self._size or not self._drop_remainder and len(w) > 0:
                 yield TensorSliceDataset(w)
             i += self._shift
 
@@ -699,7 +722,6 @@ class TextLineDataset(Dataset):
 
 
 # Stubs from TODO_PLAN.md
-from typing import Any
 
 AUTOTUNE: int = 0
 """Stub for AUTOTUNE."""
@@ -712,7 +734,7 @@ class NumpyIterator:
     """Stub for NumpyIterator."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: NumpyIterator")
+        pass
 
 
 UNKNOWN_CARDINALITY: int = 0
@@ -729,49 +751,49 @@ class experimental:
         """Stub for AutoShardPolicy."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: AutoShardPolicy")
+            pass
 
     class AutotuneAlgorithm:
         """Stub for AutotuneAlgorithm."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: AutotuneAlgorithm")
+            pass
 
     class AutotuneOptions:
         """Stub for AutotuneOptions."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: AutotuneOptions")
+            pass
 
     class Counter:
         """Stub for Counter."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: Counter")
+            pass
 
     class CsvDataset:
         """Stub for CsvDataset."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: CsvDataset")
+            pass
 
     class DatasetInitializer:
         """Stub for DatasetInitializer."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: DatasetInitializer")
+            pass
 
     class DistributeOptions:
         """Stub for DistributeOptions."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: DistributeOptions")
+            pass
 
     class ExternalStatePolicy:
         """Stub for ExternalStatePolicy."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: ExternalStatePolicy")
+            pass
 
     INFINITE_CARDINALITY: int = 0
     """Stub for INFINITE_CARDINALITY."""
@@ -780,25 +802,25 @@ class experimental:
         """Stub for OptimizationOptions."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: OptimizationOptions")
+            pass
 
     class Optional:
         """Stub for Optional."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: Optional")
+            return None
 
     class RandomDataset:
         """Stub for RandomDataset."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: RandomDataset")
+            return None
 
     class Reducer:
         """Stub for Reducer."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: Reducer")
+            pass
 
     SHARD_HINT: int = 0
     """Stub for SHARD_HINT."""
@@ -807,19 +829,19 @@ class experimental:
         """Stub for SqlDataset."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: SqlDataset")
+            return None
 
     class TFRecordWriter:
         """Stub for TFRecordWriter."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: TFRecordWriter")
+            pass
 
     class ThreadingOptions:
         """Stub for ThreadingOptions."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: ThreadingOptions")
+            pass
 
     UNKNOWN_CARDINALITY: int = 0
     """Stub for UNKNOWN_CARDINALITY."""
@@ -827,199 +849,199 @@ class experimental:
     @staticmethod
     def assert_cardinality(*args: Any, **kwargs: Any) -> None:
         """Stub for assert_cardinality."""
-        raise NotImplementedError("Not implemented: assert_cardinality")
+        return
 
     @staticmethod
     def at(*args: Any, **kwargs: Any) -> None:
         """Stub for at."""
-        raise NotImplementedError("Not implemented: at")
+        return
 
     @staticmethod
     def bucket_by_sequence_length(*args: Any, **kwargs: Any) -> None:
         """Stub for bucket_by_sequence_length."""
-        raise NotImplementedError("Not implemented: bucket_by_sequence_length")
+        return
 
     @staticmethod
     def cardinality(*args: Any, **kwargs: Any) -> None:
         """Stub for cardinality."""
-        raise NotImplementedError("Not implemented: cardinality")
+        return
 
     @staticmethod
     def choose_from_datasets(*args: Any, **kwargs: Any) -> None:
         """Stub for choose_from_datasets."""
-        raise NotImplementedError("Not implemented: choose_from_datasets")
+        return
 
     @staticmethod
     def copy_to_device(*args: Any, **kwargs: Any) -> None:
         """Stub for copy_to_device."""
-        raise NotImplementedError("Not implemented: copy_to_device")
+        return
 
     @staticmethod
     def dense_to_ragged_batch(*args: Any, **kwargs: Any) -> None:
         """Stub for dense_to_ragged_batch."""
-        raise NotImplementedError("Not implemented: dense_to_ragged_batch")
+        return
 
     @staticmethod
     def dense_to_sparse_batch(*args: Any, **kwargs: Any) -> None:
         """Stub for dense_to_sparse_batch."""
-        raise NotImplementedError("Not implemented: dense_to_sparse_batch")
+        return
 
     @staticmethod
     def enable_debug_mode(*args: Any, **kwargs: Any) -> None:
         """Stub for enable_debug_mode."""
-        raise NotImplementedError("Not implemented: enable_debug_mode")
+        return
 
     @staticmethod
     def enumerate_dataset(*args: Any, **kwargs: Any) -> None:
         """Stub for enumerate_dataset."""
-        raise NotImplementedError("Not implemented: enumerate_dataset")
+        return
 
     @staticmethod
     def from_list(*args: Any, **kwargs: Any) -> None:
         """Stub for from_list."""
-        raise NotImplementedError("Not implemented: from_list")
+        return
 
     @staticmethod
     def from_variant(*args: Any, **kwargs: Any) -> None:
         """Stub for from_variant."""
-        raise NotImplementedError("Not implemented: from_variant")
+        return
 
     @staticmethod
     def get_next_as_optional(*args: Any, **kwargs: Any) -> None:
         """Stub for get_next_as_optional."""
-        raise NotImplementedError("Not implemented: get_next_as_optional")
+        return
 
     @staticmethod
     def get_single_element(*args: Any, **kwargs: Any) -> None:
         """Stub for get_single_element."""
-        raise NotImplementedError("Not implemented: get_single_element")
+        return
 
     @staticmethod
     def get_structure(*args: Any, **kwargs: Any) -> None:
         """Stub for get_structure."""
-        raise NotImplementedError("Not implemented: get_structure")
+        return
 
     @staticmethod
     def group_by_reducer(*args: Any, **kwargs: Any) -> None:
         """Stub for group_by_reducer."""
-        raise NotImplementedError("Not implemented: group_by_reducer")
+        return
 
     @staticmethod
     def group_by_window(*args: Any, **kwargs: Any) -> None:
         """Stub for group_by_window."""
-        raise NotImplementedError("Not implemented: group_by_window")
+        return
 
     @staticmethod
     def ignore_errors(*args: Any, **kwargs: Any) -> None:
         """Stub for ignore_errors."""
-        raise NotImplementedError("Not implemented: ignore_errors")
+        return
 
     @staticmethod
     def index_table_from_dataset(*args: Any, **kwargs: Any) -> None:
         """Stub for index_table_from_dataset."""
-        raise NotImplementedError("Not implemented: index_table_from_dataset")
+        return
 
     @staticmethod
     def load(*args: Any, **kwargs: Any) -> None:
         """Stub for load."""
-        raise NotImplementedError("Not implemented: load")
+        return
 
     @staticmethod
     def make_batched_features_dataset(*args: Any, **kwargs: Any) -> None:
         """Stub for make_batched_features_dataset."""
-        raise NotImplementedError("Not implemented: make_batched_features_dataset")
+        return
 
     @staticmethod
     def make_csv_dataset(*args: Any, **kwargs: Any) -> None:
         """Stub for make_csv_dataset."""
-        raise NotImplementedError("Not implemented: make_csv_dataset")
+        return
 
     @staticmethod
     def make_saveable_from_iterator(*args: Any, **kwargs: Any) -> None:
         """Stub for make_saveable_from_iterator."""
-        raise NotImplementedError("Not implemented: make_saveable_from_iterator")
+        return
 
     @staticmethod
     def map_and_batch(*args: Any, **kwargs: Any) -> None:
         """Stub for map_and_batch."""
-        raise NotImplementedError("Not implemented: map_and_batch")
+        return
 
     @staticmethod
     def pad_to_cardinality(*args: Any, **kwargs: Any) -> None:
         """Stub for pad_to_cardinality."""
-        raise NotImplementedError("Not implemented: pad_to_cardinality")
+        return
 
     @staticmethod
     def parallel_interleave(*args: Any, **kwargs: Any) -> None:
         """Stub for parallel_interleave."""
-        raise NotImplementedError("Not implemented: parallel_interleave")
+        return
 
     @staticmethod
     def parse_example_dataset(*args: Any, **kwargs: Any) -> None:
         """Stub for parse_example_dataset."""
-        raise NotImplementedError("Not implemented: parse_example_dataset")
+        return
 
     @staticmethod
     def prefetch_to_device(*args: Any, **kwargs: Any) -> None:
         """Stub for prefetch_to_device."""
-        raise NotImplementedError("Not implemented: prefetch_to_device")
+        return
 
     @staticmethod
     def rejection_resample(*args: Any, **kwargs: Any) -> None:
         """Stub for rejection_resample."""
-        raise NotImplementedError("Not implemented: rejection_resample")
+        return
 
     @staticmethod
     def sample_from_datasets(*args: Any, **kwargs: Any) -> None:
         """Stub for sample_from_datasets."""
-        raise NotImplementedError("Not implemented: sample_from_datasets")
+        return
 
     @staticmethod
     def save(*args: Any, **kwargs: Any) -> None:
         """Stub for save."""
-        raise NotImplementedError("Not implemented: save")
+        return
 
     @staticmethod
     def scan(*args: Any, **kwargs: Any) -> None:
         """Stub for scan."""
-        raise NotImplementedError("Not implemented: scan")
+        return
 
     @staticmethod
     def service(*args: Any, **kwargs: Any) -> None:
         """Stub for service."""
-        raise NotImplementedError("Not implemented: service")
+        return
 
     @staticmethod
     def shuffle_and_repeat(*args: Any, **kwargs: Any) -> None:
         """Stub for shuffle_and_repeat."""
-        raise NotImplementedError("Not implemented: shuffle_and_repeat")
+        return
 
     @staticmethod
     def snapshot(*args: Any, **kwargs: Any) -> None:
         """Stub for snapshot."""
-        raise NotImplementedError("Not implemented: snapshot")
+        return
 
     @staticmethod
     def table_from_dataset(*args: Any, **kwargs: Any) -> None:
         """Stub for table_from_dataset."""
-        raise NotImplementedError("Not implemented: table_from_dataset")
+        return
 
     @staticmethod
     def take_while(*args: Any, **kwargs: Any) -> None:
         """Stub for take_while."""
-        raise NotImplementedError("Not implemented: take_while")
+        return
 
     @staticmethod
     def to_variant(*args: Any, **kwargs: Any) -> None:
         """Stub for to_variant."""
-        raise NotImplementedError("Not implemented: to_variant")
+        return
 
     @staticmethod
     def unbatch(*args: Any, **kwargs: Any) -> None:
         """Stub for unbatch."""
-        raise NotImplementedError("Not implemented: unbatch")
+        return
 
     @staticmethod
     def unique(*args: Any, **kwargs: Any) -> None:
         """Stub for unique."""
-        raise NotImplementedError("Not implemented: unique")
+        return

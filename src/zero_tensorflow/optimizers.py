@@ -1,41 +1,15 @@
-"""Stub module for optimizers."""
+"""Optimizers module."""
 
-from zero_keras.optimizers import *  # noqa: F403
-from typing import Any
+import zero_keras.optimizers.legacy as legacy_mod
+from zero_keras.optimizers import *
 
 
 class legacy:
-    """Stub for legacy module."""
+    """Legacy optimizers module."""
 
-    class Adagrad:
-        """Stub for Adagrad."""
-
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: Adagrad")
-
-    class Adam:
-        """Stub for Adam."""
-
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: Adam")
-
-    class Ftrl:
-        """Stub for Ftrl."""
-
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: Ftrl")
-
-    class Optimizer:
-        """Stub for Optimizer."""
-
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: Optimizer")
-
-    class RMSprop:
-        """Stub for RMSprop."""
-
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: RMSprop")
-
-    SGD: int = 0
-    """Stub for SGD."""
+    Adagrad = legacy_mod.Adagrad
+    Adam = legacy_mod.Adam
+    Ftrl = legacy_mod.Ftrl
+    Optimizer = legacy_mod.Optimizer
+    RMSprop = legacy_mod.RMSprop
+    SGD = legacy_mod.SGD

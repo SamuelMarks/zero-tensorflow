@@ -10,57 +10,57 @@ class experimental:
         """Stub for AtomicFunction."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: AtomicFunction")
+            pass
 
     class Callable:
         """Stub for Callable."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: Callable")
+            pass
 
     class ConcreteFunction:
         """Stub for ConcreteFunction."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: ConcreteFunction")
+            pass
 
     class FunctionType:
         """Stub for FunctionType."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: FunctionType")
+            pass
 
     class GenericFunction:
         """Stub for GenericFunction."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: GenericFunction")
+            pass
 
     class PolymorphicFunction:
         """Stub for PolymorphicFunction."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: PolymorphicFunction")
+            pass
 
     class SupportsTracingProtocol:
         """Stub for SupportsTracingProtocol."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: SupportsTracingProtocol")
+            pass
 
     class TensorLike:
         """Stub for TensorLike."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: TensorLike")
+            pass
 
     class TraceType:
         """Stub for TraceType."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: TraceType")
+            pass
 
     @staticmethod
     def distributed(*args: Any, **kwargs: Any) -> None:
         """Stub for distributed."""
-        raise NotImplementedError("Not implemented: distributed")
+        return

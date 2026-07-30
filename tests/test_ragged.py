@@ -1,15 +1,18 @@
-import pytest
-from zero_tensorflow import ragged, RaggedTensor
+from zero_tensorflow.ragged import RaggedTensor, boolean_mask, map_flat_values
 
 
-def test_ragged_tensor():
-    t = RaggedTensor(1, 2, a=3)
-    assert t._args == (1, 2)
-    assert t._kwargs == {"a": 3}
+def test_ragged():
+    rt1 = RaggedTensor()
+    assert isinstance(rt1, RaggedTensor)
 
+    rt2 = boolean_mask([1, 2], [True, False])
+    assert isinstance(rt2, RaggedTensor)
 
-def test_ragged_ops():
-    with pytest.raises(NotImplementedError):
-        ragged.boolean_mask(1, 1)
-    with pytest.raises(NotImplementedError):
-        ragged.map_flat_values(1)
+    def dummy_op(x):
+        return x
+
+    rt3 = map_flat_values(dummy_op, [1, 2])
+    assert isinstance(rt3, RaggedTensor)
+
+    rt4 = map_flat_values(dummy_op)
+    assert isinstance(rt4, RaggedTensor)

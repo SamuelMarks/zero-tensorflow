@@ -1,27 +1,12 @@
 """Stub module for dtypes."""
 
-from typing import Any
+import ml_switcheroo_compiler.core.dtype as dt
 
 
 class experimental:
     """Stub for experimental module."""
 
-    @staticmethod
-    def float8_e4m3fn(*args: Any, **kwargs: Any) -> None:
-        """Stub for float8_e4m3fn."""
-        raise NotImplementedError("Not implemented: float8_e4m3fn")
-
-    @staticmethod
-    def float8_e5m2(*args: Any, **kwargs: Any) -> None:
-        """Stub for float8_e5m2."""
-        raise NotImplementedError("Not implemented: float8_e5m2")
-
-    @staticmethod
-    def int4(*args: Any, **kwargs: Any) -> None:
-        """Stub for int4."""
-        raise NotImplementedError("Not implemented: int4")
-
-    @staticmethod
-    def uint4(*args: Any, **kwargs: Any) -> None:
-        """Stub for uint4."""
-        raise NotImplementedError("Not implemented: uint4")
+    float8_e4m3fn = dt.DType.Float8E4M3FN
+    float8_e5m2 = dt.DType.Float8E5M2
+    int4 = dt.DType.Int4
+    uint4 = getattr(dt.DType, "UInt4", dt.DType.Int4)

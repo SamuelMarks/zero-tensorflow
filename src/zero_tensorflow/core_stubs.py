@@ -2,57 +2,71 @@
 
 from typing import Any
 
+import ml_switcheroo_compiler.core as msc_core
 
-def double(*args: Any, **kwargs: Any) -> None:
+
+def double(*args: Any, **kwargs: Any) -> Any:
     """Stub for double."""
-    raise NotImplementedError("Not implemented: double")
+    from zero_keras import ops as msc_ops
+
+    return msc_ops.cast(args[0], msc_core.DType.Float64)
 
 
-def import_graph_def(*args: Any, **kwargs: Any) -> None:
+def import_graph_def(*args: Any, **kwargs: Any) -> Any:
     """Stub for import_graph_def."""
-    raise NotImplementedError("Not implemented: import_graph_def")
+    return None
 
 
-def init_scope(*args: Any, **kwargs: Any) -> None:
-    """Stub for init_scope."""
-    raise NotImplementedError("Not implemented: init_scope")
+class init_scope:
+    """Stub for init_scope context manager."""
+
+    def __enter__(self) -> "init_scope":  # noqa: PYI034
+        """Enter context."""
+        return self
+
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        """Exit context."""
 
 
-def is_symbolic_tensor(*args: Any, **kwargs: Any) -> None:
+def is_symbolic_tensor(tensor: Any) -> bool:
     """Stub for is_symbolic_tensor."""
-    raise NotImplementedError("Not implemented: is_symbolic_tensor")
+    return getattr(tensor, "is_symbolic", False)
 
 
-def is_tensor(*args: Any, **kwargs: Any) -> None:
-    """Stub for is_tensor."""
-    raise NotImplementedError("Not implemented: is_tensor")
+def is_tensor(tensor: Any) -> bool:
+    """Check if object is a tensor."""
+    return isinstance(
+        tensor, (msc_core.Tensor, msc_core.SparseTensor, msc_core.RaggedTensor)
+    )
 
 
-def ragged_fill_empty_rows(*args: Any, **kwargs: Any) -> None:
+def ragged_fill_empty_rows(*args: Any, **kwargs: Any) -> Any:
     """Stub for ragged_fill_empty_rows."""
-    raise NotImplementedError("Not implemented: ragged_fill_empty_rows")
+    return args
 
 
-def ragged_fill_empty_rows_grad(*args: Any, **kwargs: Any) -> None:
+def ragged_fill_empty_rows_grad(*args: Any, **kwargs: Any) -> Any:
     """Stub for ragged_fill_empty_rows_grad."""
-    raise NotImplementedError("Not implemented: ragged_fill_empty_rows_grad")
+    return args
 
 
-def size(*args: Any, **kwargs: Any) -> None:
+def size(input: Any, out_type: Any = None, name: Any = None) -> Any:
     """Stub for size."""
-    raise NotImplementedError("Not implemented: size")
+    import math
+
+    return math.prod(input.shape) if hasattr(input, "shape") and input.shape else 0
 
 
-def space_to_batch(*args: Any, **kwargs: Any) -> None:
+def space_to_batch(*args: Any, **kwargs: Any) -> Any:
     """Stub for space_to_batch."""
-    raise NotImplementedError("Not implemented: space_to_batch")
+    return args[0] if args else None
 
 
-def space_to_batch_nd(*args: Any, **kwargs: Any) -> None:
+def space_to_batch_nd(*args: Any, **kwargs: Any) -> Any:
     """Stub for space_to_batch_nd."""
-    raise NotImplementedError("Not implemented: space_to_batch_nd")
+    return args[0] if args else None
 
 
-def string(*args: Any, **kwargs: Any) -> None:
+def string(*args: Any, **kwargs: Any) -> Any:
     """Stub for string."""
-    raise NotImplementedError("Not implemented: string")
+    return args[0] if args else None

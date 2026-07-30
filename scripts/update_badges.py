@@ -1,7 +1,7 @@
+import json
 import os
 import re
 import subprocess
-import json
 
 
 def get_color(pct):
@@ -30,7 +30,7 @@ def get_test_coverage():
         with open("coverage.json", "r") as f:
             data = json.load(f)
             return data["totals"]["percent_covered"]
-    except Exception:
+    except Exception:  # noqa: BLE001
         return 0.0
 
 
@@ -43,13 +43,14 @@ def get_official_test_pass_rate():
         subprocess.run(
             [
                 "pytest",
-                "tests/official_tf/",
                 "tests/official_keras/",
+                "tests/official_tf/",
                 "--json-report",
-                "--json-report-file=.report.json",
+                "--json-report-file=official_report.json",
             ],
             capture_output=True,
             text=True,
+            check=False,
         )
         with open(".report.json", "r") as f:
             data = json.load(f)
@@ -61,7 +62,7 @@ def get_official_test_pass_rate():
             if total == 0:
                 return 100.0
             return (passed / total) * 100.0
-    except Exception:
+    except Exception:  # noqa: BLE001
         return 0.0
 
 

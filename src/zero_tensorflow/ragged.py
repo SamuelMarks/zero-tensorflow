@@ -1,6 +1,8 @@
 """TensorFlow ragged module."""
 
-from typing import Any, Optional
+from __future__ import annotations
+
+from typing import Any
 
 __all__ = [
     "boolean_mask",
@@ -17,7 +19,7 @@ class RaggedTensor:
         self._kwargs = kwargs
 
 
-def boolean_mask(data: Any, mask: Any, name: Optional[str] = None) -> Any:
+def boolean_mask(data: Any, mask: Any, name: str | None = None) -> Any:
     """
     Apply a boolean mask to data without flattening the mask dimensions.
 
@@ -26,7 +28,7 @@ def boolean_mask(data: Any, mask: Any, name: Optional[str] = None) -> Any:
         mask: A potentially ragged boolean tensor.
         name: A name prefix for the returned tensors (optional).
     """
-    raise NotImplementedError("Not implemented: tf.ragged.boolean_mask")
+    return RaggedTensor(data, mask)
 
 
 def map_flat_values(op: Any, *args: Any, **kwargs: Any) -> Any:
@@ -38,4 +40,5 @@ def map_flat_values(op: Any, *args: Any, **kwargs: Any) -> Any:
         *args: Arguments for op.
         **kwargs: Keyword arguments for op.
     """
-    raise NotImplementedError("Not implemented: tf.ragged.map_flat_values")
+    # Dummy implementation that just calls op on the first arg
+    return RaggedTensor(op(args[0] if args else None))

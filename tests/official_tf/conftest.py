@@ -1,13 +1,14 @@
 import sys
-import zero_tensorflow as tf
 import types
+
 import pytest
-import ml_switcheroo_compiler
+
+import zero_tensorflow as tf
 
 
 @pytest.fixture(autouse=True)
 def switcheroo_config():
-    with ml_switcheroo_compiler.EagerMode():
+    if True:
         yield
 
 
@@ -34,10 +35,10 @@ class FakeTensorFlowModule(types.ModuleType):
                         return tensor
 
                 @staticmethod
-                def run_all_in_graph_and_eager_modes(cls=None):
-                    if cls is None:
+                def run_all_in_graph_and_eager_modes(c=None):
+                    if c is None:
                         return lambda c: c
-                    return cls
+                    return c
 
                 @staticmethod
                 def device(use_gpu=False):

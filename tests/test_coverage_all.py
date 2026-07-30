@@ -1,7 +1,8 @@
 import inspect
+from unittest.mock import patch
+
 import zero_tensorflow as tf
 from zero_tensorflow import Tensor
-from unittest.mock import patch
 
 
 def test_math_coverage():
@@ -27,13 +28,13 @@ def test_math_coverage():
             method = getattr(tf.math, method_name)
             try:
                 method(x)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 try:
                     method(x, y)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     try:
                         method(x, y, x)
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
 
 
@@ -54,45 +55,45 @@ def test_nn_coverage():
             method = getattr(tf.nn, method_name)
             try:
                 method(x)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 try:
                     method(x, y)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     try:
                         method(x, y, x)
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
 
 
 def test_data_coverage():
     try:
         tf.data.Dataset.from_tensor_slices([1])
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
     try:
         tf.data.Dataset.from_generator(lambda: 1)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
     try:
         tf.data.Dataset.from_tensors([1])
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
     try:
         tf.data.Dataset.list_files("*")
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
     try:
         tf.data.Dataset.range(5)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
     try:
         tf.data.Dataset.zip((tf.data.Dataset.range(5),))
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
     try:
@@ -119,16 +120,16 @@ def test_data_coverage():
         d.cardinality()
         d.options()
         d.with_options(None)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
     try:
         tf.data.TFRecordDataset("x")
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
     try:
         tf.data.TextLineDataset("x")
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
 
@@ -148,10 +149,10 @@ def test_linalg_coverage():
             method = getattr(tf.linalg, method_name)
             try:
                 method(x)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 try:
                     method(x, y)
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
 
 
@@ -171,10 +172,10 @@ def test_bitwise_coverage():
             method = getattr(tf.bitwise, method_name)
             try:
                 method(x)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 try:
                     method(x, y)
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
 
 
@@ -198,13 +199,13 @@ def test_toplevel_coverage():
             method = getattr(tf, method_name)
             try:
                 method(x)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 try:
                     method(x, y)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     try:
                         method(x, y, x)
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
 
 

@@ -1,25 +1,30 @@
-"""TensorFlow strings module."""
+"TensorFlow strings module."
 
-from typing import Any, Optional, Sequence
-import numpy as np
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
+
+from ml_switcheroo_compiler.core.config import config
+from zero_keras import ops as _ops
 
 __all__ = [
-    "join",
-    "split",
-    "length",
-    "regex_replace",
-    "regex_full_match",
-    "to_number",
     "bytes_split",
     "format",
+    "join",
+    "length",
     "lower",
     "ngrams",
     "reduce_join",
+    "regex_full_match",
+    "regex_replace",
+    "split",
     "strip",
     "substr",
     "to_hash_bucket",
     "to_hash_bucket_fast",
     "to_hash_bucket_strong",
+    "to_number",
     "unicode_decode",
     "unicode_decode_with_offsets",
     "unicode_encode",
@@ -32,52 +37,71 @@ __all__ = [
 ]
 
 
-def _to_np(val: Any) -> Any:
-    # Basic unwrap to numpy for eager execution mapping
+def _is_tracing(val):
+    if hasattr(val, "shape") and hasattr(val, "dtype"):
+        return not config.eager_mode
+    return False
+
+
+def _to_python(val: Any) -> Any:
     if hasattr(val, "numpy"):
         val = val.numpy()
-    return np.array(val)
-
-
-def _wrap_np(val: Any) -> Any:
-    # Need to keep it basic for now, return as is or minimal wrap
+    if hasattr(val, "tolist"):
+        val = val.tolist()
     return val
 
 
-def join(inputs: Sequence[Any], separator: str = "", name: Optional[str] = None) -> Any:
-    inputs_np = [_to_np(x) for x in inputs]
-    # Simple broadcasted string join
-    if not inputs_np:
-        return _wrap_np(np.array(""))
-    res = inputs_np[0].astype(str)
-    for arr in inputs_np[1:]:
-        res = np.char.add(np.char.add(res, separator), arr.astype(str))
-    return _wrap_np(res)
+def _map_nested(func, val):
+    if isinstance(val, (list, tuple)):
+        return [_map_nested(func, v) for v in val]
+    return func(val)
+
+
+def _reduce_join_nested(val, sep=""):
+    if isinstance(val, (list, tuple)):
+        return sep.join([_reduce_join_nested(v, sep) for v in val])
+    return str(val)
+
+
+def join(inputs: Sequence[Any], separator: str = "", name: str | None = None) -> Any:
+    if not inputs:
+        return ""
+    if any(_is_tracing(x) for x in inputs):
+        return _ops.text.string_join(inputs, separator=separator)
+    py_inputs = [_to_python(x) for x in inputs]
+    is_list = any(isinstance(x, list) for x in py_inputs)
+    if not is_list:
+        return separator.join(str(x) for x in py_inputs)
+    length = max((len(x) for x in py_inputs if isinstance(x, list)), default=0)
+    res = []
+    for i in range(length):
+        parts = []
+        for inp in py_inputs:
+            if isinstance(inp, list):
+                parts.append(str(inp[i]))
+            else:
+                parts.append(str(inp))
+        res.append(separator.join(parts))
+    return res
 
 
 def split(
     input: Any,
-    sep: Optional[str] = None,
-    maxsplit: int = -1,
-    name: Optional[str] = None,
+    sep: str | None = None,
+    maxsplit: int = (-1),
+    name: str | None = None,
 ) -> Any:
-    arr = _to_np(input).astype(str)
-
-    # Numpy doesn't have a direct ragged split, this returns python lists.
-    # For a stub implementation that passes compilation/tests, we can return the exact lists or numpy array of objects.
-    def _split(s):
-        return s.split(sep, maxsplit)
-
-    vsplit = np.vectorize(_split, otypes=[object])
-    res = vsplit(arr)
-    if res.ndim == 0:
-        return _wrap_np(res.item())
-    return _wrap_np(res)
+    if _is_tracing(input):
+        return _ops.text.string_split(input, sep=sep, maxsplit=maxsplit)
+    val = _to_python(input)
+    return _map_nested((lambda x: str(x).split(sep, maxsplit)), val)
 
 
-def length(input: Any, unit: str = "BYTE", name: Optional[str] = None) -> Any:
-    arr = _to_np(input).astype(str)
-    return _wrap_np(np.char.str_len(arr))
+def length(input: Any, unit: str = "BYTE", name: str | None = None) -> Any:
+    if _is_tracing(input):
+        return _ops.text.string_length(input, unit=unit)
+    val = _to_python(input)
+    return _map_nested((lambda x: len(str(x))), val)
 
 
 def regex_replace(
@@ -85,51 +109,42 @@ def regex_replace(
     pattern: str,
     rewrite: str,
     replace_global: bool = True,
-    name: Optional[str] = None,
+    name: str | None = None,
 ) -> Any:
-    arr = _to_np(input).astype(str)
+    if _is_tracing(input):
+        return _ops.text.regex_replace(
+            input, pattern, rewrite, replace_global=replace_global
+        )
     import re
 
     p = re.compile(pattern)
     count = 0 if replace_global else 1
-
-    def _rep(s):
-        return p.sub(rewrite, s, count=count)
-
-    vrep = np.vectorize(_rep, otypes=[str])
-    return _wrap_np(vrep(arr))
+    val = _to_python(input)
+    return _map_nested((lambda x: p.sub(rewrite, str(x), count=count)), val)
 
 
-def regex_full_match(input: Any, pattern: str, name: Optional[str] = None) -> Any:
-    arr = _to_np(input).astype(str)
+def regex_full_match(input: Any, pattern: str, name: str | None = None) -> Any:
+    if _is_tracing(input):
+        return _ops.text.regex_full_match(input, pattern)
     import re
 
     p = re.compile(pattern)
-
-    def _match(s):
-        return p.fullmatch(s) is not None
-
-    vmatch = np.vectorize(_match, otypes=[bool])
-    return _wrap_np(vmatch(arr))
+    val = _to_python(input)
+    return _map_nested((lambda x: p.fullmatch(str(x)) is not None), val)
 
 
-def to_number(input: Any, out_type: Any = None, name: Optional[str] = None) -> Any:
-    arr = _to_np(input)
-    # Default float32
-    return _wrap_np(arr.astype(np.float32))
+def to_number(input: Any, out_type: Any = None, name: str | None = None) -> Any:
+    if _is_tracing(input):
+        return _ops.text.string_to_number(input, out_type=out_type)
+    val = _to_python(input)
+    return _map_nested((lambda x: float(x)), val)
 
 
-def bytes_split(input: Any, name: Optional[str] = None) -> Any:
-    arr = _to_np(input).astype(str)
-
-    def _split(s):
-        return list(s)
-
-    vsplit = np.vectorize(_split, otypes=[object])
-    res = vsplit(arr)
-    if res.ndim == 0:
-        return _wrap_np(res.item())
-    return _wrap_np(res)
+def bytes_split(input: Any, name: str | None = None) -> Any:
+    if _is_tracing(input):
+        return _ops.text.string_split(input, sep="")
+    val = _to_python(input)
+    return _map_nested((lambda x: list(str(x))), val)
 
 
 def format(
@@ -137,81 +152,83 @@ def format(
     inputs: Sequence[Any],
     placeholder: str = "{}",
     summarize: int = 3,
-    name: Optional[str] = None,
+    name: str | None = None,
 ) -> Any:
-    # A very naive implementation
-    inputs_str = [_to_np(x).astype(str) for x in inputs]
+    py_inputs = [_to_python(x) for x in inputs]
     s = template
-    for i in inputs_str:
+    for i in py_inputs:
         s = s.replace(placeholder, str(i), 1)
-    return _wrap_np(np.array(s))
+    return s
 
 
-def lower(input: Any, encoding: str = "utf-8", name: Optional[str] = None) -> Any:
-    arr = _to_np(input).astype(str)
-    return _wrap_np(np.char.lower(arr))
+def lower(input: Any, encoding: str = "utf-8", name: str | None = None) -> Any:
+    if _is_tracing(input):
+        return _ops.text.string_lower(input, encoding=encoding)
+    val = _to_python(input)
+    return _map_nested((lambda x: str(x).lower()), val)
 
 
 def ngrams(
     data: Any,
     ngram_width: Any,
     separator: str = " ",
-    pad_values: Optional[Any] = None,
-    padding_width: Optional[Any] = None,
+    pad_values: Any | None = None,
+    padding_width: Any | None = None,
     preserve_short_sequences: bool = False,
-    name: Optional[str] = None,
+    name: str | None = None,
 ) -> Any:
-    return _wrap_np(np.array([]))
+    return []
 
 
 def reduce_join(
     inputs: Any,
-    axis: Optional[Any] = None,
+    axis: Any | None = None,
     keepdims: bool = False,
     separator: str = "",
-    name: Optional[str] = None,
+    name: str | None = None,
 ) -> Any:
-    arr = _to_np(inputs).astype(str)
-    # Not a full implementation, just to pass tests
-    res = separator.join(arr.flatten())
-    return _wrap_np(np.array(res))
+    if _is_tracing(inputs):
+        return _ops.reduce_join(
+            inputs, axis=axis, keepdims=keepdims, separator=separator
+        )
+    val = _to_python(inputs)
+    return _reduce_join_nested(val, sep=separator)
 
 
-def strip(input: Any, name: Optional[str] = None) -> Any:
-    arr = _to_np(input).astype(str)
-    return _wrap_np(np.char.strip(arr))
+def strip(input: Any, name: str | None = None) -> Any:
+    if _is_tracing(input):
+        return _ops.text.regex_replace(input, "^\\s+|\\s+$", "")
+    val = _to_python(input)
+    return _map_nested((lambda x: str(x).strip()), val)
 
 
 def substr(
-    input: Any, pos: Any, len: Any, unit: str = "BYTE", name: Optional[str] = None
+    input: Any, pos: Any, len: Any, unit: str = "BYTE", name: str | None = None
 ) -> Any:
-    arr = _to_np(input).astype(str)
+    if _is_tracing(input):
+        return _ops.text.string_substr(input, pos, len, unit=unit)
+    val = _to_python(input)
 
-    def _sub(s):
-        return s[pos : pos + len]
+    def _sub(x):
+        s = str(x)
+        return s[pos : (pos + len)]
 
-    vsub = np.vectorize(_sub, otypes=[str])
-    return _wrap_np(vsub(arr))
-
-
-def to_hash_bucket(input: Any, num_buckets: int, name: Optional[str] = None) -> Any:
-    arr = _to_np(input).astype(str)
-
-    def _hash(s):
-        return hash(s) % num_buckets
-
-    vhash = np.vectorize(_hash, otypes=[np.int64])
-    return _wrap_np(vhash(arr))
+    return _map_nested(_sub, val)
 
 
-def to_hash_bucket_fast(
-    input: Any, num_buckets: int, name: Optional[str] = None
-) -> Any:
+def to_hash_bucket(input: Any, num_buckets: int, name: str | None = None) -> Any:
+    if _is_tracing(input):
+        return _ops.text.string_to_hash(input, num_buckets=num_buckets)
+    val = _to_python(input)
+    return _map_nested((lambda x: hash(str(x)) % num_buckets), val)
+
+
+def to_hash_bucket_fast(input: Any, num_buckets: int, name: str | None = None) -> Any:
     return to_hash_bucket(input, num_buckets, name)
 
 
 def to_hash_bucket_strong(
-    input: Any, num_buckets: int, key: Sequence[int], name: Optional[str] = None
+    input: Any, num_buckets: int, key: Sequence[int], name: str | None = None
 ) -> Any:
     return to_hash_bucket(input, num_buckets, name)
 
@@ -222,9 +239,9 @@ def unicode_decode(
     errors: str = "replace",
     replacement_char: int = 65533,
     replace_control_characters: bool = False,
-    name: Optional[str] = None,
+    name: str | None = None,
 ) -> Any:
-    return _wrap_np(np.array([]))
+    return []
 
 
 def unicode_decode_with_offsets(
@@ -233,9 +250,9 @@ def unicode_decode_with_offsets(
     errors: str = "replace",
     replacement_char: int = 65533,
     replace_control_characters: bool = False,
-    name: Optional[str] = None,
+    name: str | None = None,
 ) -> Any:
-    return _wrap_np(np.array([])), _wrap_np(np.array([]))
+    return ([], [])
 
 
 def unicode_encode(
@@ -243,13 +260,13 @@ def unicode_encode(
     output_encoding: str,
     errors: str = "replace",
     replacement_char: int = 65533,
-    name: Optional[str] = None,
+    name: str | None = None,
 ) -> Any:
-    return _wrap_np(np.array([]))
+    return []
 
 
-def unicode_script(input: Any, name: Optional[str] = None) -> Any:
-    return _wrap_np(np.array([]))
+def unicode_script(input: Any, name: str | None = None) -> Any:
+    return []
 
 
 def unicode_split(
@@ -257,9 +274,9 @@ def unicode_split(
     input_encoding: str,
     errors: str = "replace",
     replacement_char: int = 65533,
-    name: Optional[str] = None,
+    name: str | None = None,
 ) -> Any:
-    return _wrap_np(np.array([]))
+    return []
 
 
 def unicode_split_with_offsets(
@@ -267,9 +284,9 @@ def unicode_split_with_offsets(
     input_encoding: str,
     errors: str = "replace",
     replacement_char: int = 65533,
-    name: Optional[str] = None,
+    name: str | None = None,
 ) -> Any:
-    return _wrap_np(np.array([])), _wrap_np(np.array([]))
+    return ([], [])
 
 
 def unicode_transcode(
@@ -279,9 +296,9 @@ def unicode_transcode(
     errors: str = "replace",
     replacement_char: int = 65533,
     replace_control_characters: bool = False,
-    name: Optional[str] = None,
+    name: str | None = None,
 ) -> Any:
-    return _wrap_np(np.array([]))
+    return []
 
 
 def unsorted_segment_join(
@@ -289,11 +306,13 @@ def unsorted_segment_join(
     segment_ids: Any,
     num_segments: Any,
     separator: str = "",
-    name: Optional[str] = None,
+    name: str | None = None,
 ) -> Any:
-    return _wrap_np(np.array([]))
+    return []
 
 
-def upper(input: Any, encoding: str = "utf-8", name: Optional[str] = None) -> Any:
-    arr = _to_np(input).astype(str)
-    return _wrap_np(np.char.upper(arr))
+def upper(input: Any, encoding: str = "utf-8", name: str | None = None) -> Any:
+    if _is_tracing(input):
+        return _ops.text.string_upper(input, encoding=encoding)
+    val = _to_python(input)
+    return _map_nested((lambda x: str(x).upper()), val)

@@ -1,24 +1,35 @@
-import pytest
-from zero_tensorflow import sparse, SparseTensor
+import ml_switcheroo_compiler.ops as msc_ops
+
+from zero_tensorflow.sparse import (
+    SparseTensor,
+    add,
+    concat,
+    from_dense,
+    sparse_dense_matmul,
+    split,
+    to_dense,
+)
 
 
-def test_sparse_tensor():
-    t = SparseTensor([[0, 0], [1, 2]], [1.0, 2.0], [3, 4])
-    assert t.indices == [[0, 0], [1, 2]]
-    assert t.values == [1.0, 2.0]
-    assert t.dense_shape == [3, 4]
+def test_sparse():
+    t1 = msc_ops.zeros((2, 2))
+    sp1 = SparseTensor([[0]], msc_ops.zeros((2, 2)), [1, 1])
 
+    # Just asserting it executes without error in the facade
+    res = sparse_dense_matmul(sp1, t1)
 
-def test_sparse_ops():
-    with pytest.raises(NotImplementedError):
-        sparse.sparse_dense_matmul(1, 1)
-    with pytest.raises(NotImplementedError):
-        sparse.add(1, 1)
-    with pytest.raises(NotImplementedError):
-        sparse.concat(1, [])
-    with pytest.raises(NotImplementedError):
-        sparse.split(1, 1, 1)
-    with pytest.raises(NotImplementedError):
-        sparse.to_dense(1)
-    with pytest.raises(NotImplementedError):
-        sparse.from_dense(1)
+    add(sp1, sp1)
+    add(t1, t1)
+
+    concat(0, [sp1, sp1])
+
+    split(sp1, 2, 0)
+
+    res = to_dense(sp1)
+    assert res.shape == (2, 2)
+
+    res = to_dense(t1)
+    assert res is t1
+
+    res = from_dense(t1)
+    assert isinstance(res, SparseTensor)

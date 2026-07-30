@@ -1,5 +1,6 @@
-import zero_tensorflow as tf
 import inspect
+
+import zero_tensorflow as tf
 
 
 def _call_stubs(obj, visited=None):
@@ -14,7 +15,7 @@ def _call_stubs(obj, visited=None):
             continue
         try:
             attr = getattr(obj, name)
-        except Exception:
+        except Exception:  # noqa: BLE001, S112
             continue
 
         if (
@@ -26,7 +27,7 @@ def _call_stubs(obj, visited=None):
                 attr()
             except NotImplementedError:
                 pass
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         elif inspect.isclass(attr):
             _call_stubs(attr, visited)
@@ -40,7 +41,7 @@ def _call_stubs(obj, visited=None):
                         v()
                     except NotImplementedError:
                         pass
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
 
 

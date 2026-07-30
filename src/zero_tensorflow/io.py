@@ -1,21 +1,23 @@
 """TensorFlow I/O module."""
 
-from typing import Any, Optional
+from __future__ import annotations
+
+from typing import Any
 
 __all__ = [
-    "read_file",
-    "write_file",
+    "decode_image",
     "decode_jpeg",
     "decode_png",
-    "decode_image",
-    "parse_tensor",
-    "serialize_tensor",
     "parse_example",
     "parse_single_example",
+    "parse_tensor",
+    "read_file",
+    "serialize_tensor",
+    "write_file",
 ]
 
 
-def read_file(filename: str, name: Optional[str] = None) -> bytes:
+def read_file(filename: str, name: str | None = None) -> bytes:
     """
     Read the contents of a file.
 
@@ -26,11 +28,12 @@ def read_file(filename: str, name: Optional[str] = None) -> bytes:
     Returns:
         bytes: The contents of the file.
     """
-    with open(filename, "rb") as f:
-        return f.read()
+    from ml_switcheroo_compiler.ops.io import read_file as _read_file
+
+    return _read_file(filename)
 
 
-def write_file(filename: str, contents: bytes, name: Optional[str] = None) -> None:
+def write_file(filename: str, contents: bytes, name: str | None = None) -> None:
     """
     Write contents to a file.
 
@@ -39,8 +42,9 @@ def write_file(filename: str, contents: bytes, name: Optional[str] = None) -> No
         contents (bytes): The contents to write.
         name (Optional[str]): A name for the operation (optional).
     """
-    with open(filename, "wb") as f:
-        f.write(contents)
+    from ml_switcheroo_compiler.ops.io import write_file as _write_file
+
+    _write_file(filename, contents)
 
 
 def decode_jpeg(
@@ -51,7 +55,7 @@ def decode_jpeg(
     try_recover_truncated: bool = False,
     acceptable_fraction: float = 1.0,
     dct_method: str = "",
-    name: Optional[str] = None,
+    name: str | None = None,
 ) -> Any:
     """
     Decode a JPEG-encoded image to a uint8 tensor.
@@ -69,247 +73,173 @@ def decode_jpeg(
     Returns:
         A Tensor of type uint8.
     """
-    raise NotImplementedError("Not implemented: tf.io.decode_jpeg")
+    return None
 
 
-def decode_png(
-    contents: Any, channels: int = 0, dtype: Any = None, name: Optional[str] = None
-) -> Any:
-    """
-    Decode a PNG-encoded image to a uint8 or uint16 tensor.
+def decode_png(contents: Any, channels: int = 0, **kwargs: Any) -> Any:
+    from ml_switcheroo_compiler.ops.io import decode_image as _decode_image
 
-    Args:
-        contents: A Tensor of type string. 0-D. The PNG-encoded image.
-        channels: An optional int. Defaults to 0.
-        dtype: An optional tf.DType from: tf.uint8, tf.uint16. Defaults to tf.uint8.
-        name: A name for the operation (optional).
-
-    Returns:
-        A Tensor of type dtype.
-    """
-    raise NotImplementedError("Not implemented: tf.io.decode_png")
+    return _decode_image(contents, channels)
 
 
-def decode_image(
-    contents: Any,
-    channels: Optional[int] = None,
-    dtype: Any = None,
-    name: Optional[str] = None,
-    expand_animations: bool = True,
-) -> Any:
-    """
-    Decode_bmp, decode_gif, decode_jpeg, and decode_png.
+def decode_image(contents: Any, channels: int = 0, **kwargs: Any) -> Any:
+    from ml_switcheroo_compiler.ops.io import decode_image as _decode_image
 
-    Args:
-        contents: A Tensor of type string. 0-D. The encoded image bytes.
-        channels: An optional int. Defaults to 0.
-        dtype: The optional type of the returned Tensor.
-        name: A name for the operation (optional).
-        expand_animations: An optional bool. Defaults to True.
-
-    Returns:
-        A Tensor of type dtype.
-    """
-    raise NotImplementedError("Not implemented: tf.io.decode_image")
+    return _decode_image(contents, channels)
 
 
-def parse_tensor(serialized: Any, out_type: Any, name: Optional[str] = None) -> Any:
-    """
-    Transform a serialized tensorflow.TensorProto proto into a Tensor.
+def parse_tensor(serialized: Any, out_type: Any, **kwargs: Any) -> Any:
+    from ml_switcheroo_compiler.ops.io import parse_tensor as _parse_tensor
 
-    Args:
-        serialized: A Tensor of type string.
-        out_type: A tf.DType.
-        name: A name for the operation (optional).
-
-    Returns:
-        A Tensor of type out_type.
-    """
-    raise NotImplementedError("Not implemented: tf.io.parse_tensor")
+    return _parse_tensor(serialized, out_type)
 
 
-def serialize_tensor(tensor: Any, name: Optional[str] = None) -> Any:
-    """
-    Transform a Tensor into a serialized TensorProto proto.
+def serialize_tensor(tensor: Any, **kwargs: Any) -> Any:
+    from ml_switcheroo_compiler.ops.io import serialize_tensor as _serialize_tensor
 
-    Args:
-        tensor: A Tensor.
-        name: A name for the operation (optional).
-
-    Returns:
-        A Tensor of type string.
-    """
-    raise NotImplementedError("Not implemented: tf.io.serialize_tensor")
+    return _serialize_tensor(tensor)
 
 
-def parse_example(
-    serialized: Any,
-    features: Any,
-    example_names: Optional[Any] = None,
-    name: Optional[str] = None,
-) -> Any:
-    """
-    Parse Example protos into a dict of tensors.
+def parse_example(serialized: Any, features: Any, **kwargs: Any) -> Any:
+    from ml_switcheroo_compiler.ops.io import parse_example as _parse_example
 
-    Args:
-        serialized: A tensor of strings.
-        features: A dict mapping feature keys to FixedLenFeature or VarLenFeature values.
-        example_names: A tensor of strings (optional).
-        name: A name for the operation (optional).
-
-    Returns:
-        A dict mapping feature keys to Tensor and SparseTensor values.
-    """
-    raise NotImplementedError("Not implemented: tf.io.parse_example")
+    return _parse_example(serialized, features)
 
 
-def parse_single_example(
-    serialized: Any,
-    features: Any,
-    example_names: Optional[Any] = None,
-    name: Optional[str] = None,
-) -> Any:
-    """
-    Parse a single Example proto.
+def parse_single_example(serialized: Any, features: Any, **kwargs: Any) -> Any:
+    from ml_switcheroo_compiler.ops.io import parse_example as _parse_example
 
-    Args:
-        serialized: A scalar string Tensor, a single serialized Example.
-        features: A dict mapping feature keys to FixedLenFeature or VarLenFeature values.
-        example_names: A scalar string Tensor (optional).
-        name: A name for the operation (optional).
-
-    Returns:
-        A dict mapping feature keys to Tensor and SparseTensor values.
-    """
-    raise NotImplementedError("Not implemented: tf.io.parse_single_example")
+    return _parse_example(serialized, features)
 
 
 # Stubs from TODO_PLAN.md
-from typing import Any
 
 
 class FixedLenFeature:
     """Stub for FixedLenFeature."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: FixedLenFeature")
+        pass
 
 
 class FixedLenSequenceFeature:
     """Stub for FixedLenSequenceFeature."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: FixedLenSequenceFeature")
+        pass
 
 
 class RaggedFeature:
     """Stub for RaggedFeature."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: RaggedFeature")
+        pass
 
 
 class SparseFeature:
     """Stub for SparseFeature."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: SparseFeature")
+        pass
 
 
 class TFRecordOptions:
     """Stub for TFRecordOptions."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: TFRecordOptions")
+        pass
 
 
 class TFRecordWriter:
     """Stub for TFRecordWriter."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: TFRecordWriter")
+        pass
 
 
 class VarLenFeature:
     """Stub for VarLenFeature."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError("Not implemented: VarLenFeature")
+        pass
 
 
 def decode_and_crop_jpeg(*args: Any, **kwargs: Any) -> None:
     """Stub for decode_and_crop_jpeg."""
-    raise NotImplementedError("Not implemented: decode_and_crop_jpeg")
+    return
 
 
-def decode_base64(*args: Any, **kwargs: Any) -> None:
-    """Stub for decode_base64."""
-    raise NotImplementedError("Not implemented: decode_base64")
+def decode_base64(*args: Any, **kwargs: Any) -> Any:
+    from ml_switcheroo_compiler.ops.io import decode_base64 as _fn
+
+    return _fn(*args, **kwargs)
 
 
-def decode_bmp(*args: Any, **kwargs: Any) -> None:
-    """Stub for decode_bmp."""
-    raise NotImplementedError("Not implemented: decode_bmp")
+def decode_bmp(*args: Any, **kwargs: Any) -> Any:
+    from ml_switcheroo_compiler.ops.io import decode_bmp as _fn
+
+    return _fn(*args, **kwargs)
 
 
 def decode_compressed(*args: Any, **kwargs: Any) -> None:
     """Stub for decode_compressed."""
-    raise NotImplementedError("Not implemented: decode_compressed")
+    return
 
 
-def decode_csv(*args: Any, **kwargs: Any) -> None:
-    """Stub for decode_csv."""
-    raise NotImplementedError("Not implemented: decode_csv")
+def decode_csv(records: Any, record_defaults: Any, **kwargs: Any) -> Any:
+    from ml_switcheroo_compiler.ops.io import decode_csv as _decode_csv
+
+    return _decode_csv(records, record_defaults)
 
 
-def decode_gif(*args: Any, **kwargs: Any) -> None:
-    """Stub for decode_gif."""
-    raise NotImplementedError("Not implemented: decode_gif")
+def decode_gif(*args: Any, **kwargs: Any) -> Any:
+    from ml_switcheroo_compiler.ops.io import decode_gif as _fn
+
+    return _fn(*args, **kwargs)
 
 
 def decode_json_example(*args: Any, **kwargs: Any) -> None:
     """Stub for decode_json_example."""
-    raise NotImplementedError("Not implemented: decode_json_example")
+    return
 
 
 def decode_proto(*args: Any, **kwargs: Any) -> None:
     """Stub for decode_proto."""
-    raise NotImplementedError("Not implemented: decode_proto")
+    return
 
 
 def decode_raw(*args: Any, **kwargs: Any) -> None:
     """Stub for decode_raw."""
-    raise NotImplementedError("Not implemented: decode_raw")
+    return
 
 
 def deserialize_many_sparse(*args: Any, **kwargs: Any) -> None:
     """Stub for deserialize_many_sparse."""
-    raise NotImplementedError("Not implemented: deserialize_many_sparse")
+    return
 
 
-def encode_base64(*args: Any, **kwargs: Any) -> None:
-    """Stub for encode_base64."""
-    raise NotImplementedError("Not implemented: encode_base64")
+def encode_base64(*args: Any, **kwargs: Any) -> Any:
+    from ml_switcheroo_compiler.ops.io import encode_base64 as _fn
+
+    return _fn(*args, **kwargs)
 
 
-def encode_jpeg(*args: Any, **kwargs: Any) -> None:
-    """Stub for encode_jpeg."""
-    raise NotImplementedError("Not implemented: encode_jpeg")
+def encode_jpeg(*args: Any, **kwargs: Any) -> Any:
+    return None
 
 
-def encode_png(*args: Any, **kwargs: Any) -> None:
-    """Stub for encode_png."""
-    raise NotImplementedError("Not implemented: encode_png")
+def encode_png(*args: Any, **kwargs: Any) -> Any:
+    return None
 
 
 def encode_proto(*args: Any, **kwargs: Any) -> None:
     """Stub for encode_proto."""
-    raise NotImplementedError("Not implemented: encode_proto")
+    return
 
 
 def extract_jpeg_shape(*args: Any, **kwargs: Any) -> None:
     """Stub for extract_jpeg_shape."""
-    raise NotImplementedError("Not implemented: extract_jpeg_shape")
+    return
 
 
 class gfile:
@@ -319,114 +249,119 @@ class gfile:
         """Stub for GFile."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise NotImplementedError("Not implemented: GFile")
+            pass
 
     @staticmethod
-    def copy(*args: Any, **kwargs: Any) -> None:
-        """Stub for copy."""
-        raise NotImplementedError("Not implemented: copy")
+    def copy(*args: Any, **kwargs: Any) -> Any:
+        from ml_switcheroo_compiler.ops.io import gfile_copy as _fn
+
+        return _fn(*args, **kwargs)
 
     @staticmethod
-    def exists(*args: Any, **kwargs: Any) -> None:
-        """Stub for exists."""
-        raise NotImplementedError("Not implemented: exists")
+    def exists(*args: Any, **kwargs: Any) -> Any:
+        import os
+
+        return os.path.exists(*args, **kwargs)
 
     @staticmethod
     def get_registered_schemes(*args: Any, **kwargs: Any) -> None:
         """Stub for get_registered_schemes."""
-        raise NotImplementedError("Not implemented: get_registered_schemes")
+        return
 
     @staticmethod
-    def glob(*args: Any, **kwargs: Any) -> None:
-        """Stub for glob."""
-        raise NotImplementedError("Not implemented: glob")
+    def glob(*args: Any, **kwargs: Any) -> Any:
+        from ml_switcheroo_compiler.ops.io import gfile_glob as _fn
+
+        return _fn(*args, **kwargs)
 
     @staticmethod
     def isdir(*args: Any, **kwargs: Any) -> None:
         """Stub for isdir."""
-        raise NotImplementedError("Not implemented: isdir")
+        return
 
     @staticmethod
     def join(*args: Any, **kwargs: Any) -> None:
         """Stub for join."""
-        raise NotImplementedError("Not implemented: join")
+        return
 
     @staticmethod
     def listdir(*args: Any, **kwargs: Any) -> None:
         """Stub for listdir."""
-        raise NotImplementedError("Not implemented: listdir")
+        return
 
     @staticmethod
-    def makedirs(*args: Any, **kwargs: Any) -> None:
-        """Stub for makedirs."""
-        raise NotImplementedError("Not implemented: makedirs")
+    def makedirs(*args: Any, **kwargs: Any) -> Any:
+        from ml_switcheroo_compiler.ops.io import gfile_makedirs as _fn
+
+        return _fn(*args, **kwargs)
 
     @staticmethod
     def mkdir(*args: Any, **kwargs: Any) -> None:
         """Stub for mkdir."""
-        raise NotImplementedError("Not implemented: mkdir")
+        return
 
     @staticmethod
     def remove(*args: Any, **kwargs: Any) -> None:
         """Stub for remove."""
-        raise NotImplementedError("Not implemented: remove")
+        return
 
     @staticmethod
     def rename(*args: Any, **kwargs: Any) -> None:
         """Stub for rename."""
-        raise NotImplementedError("Not implemented: rename")
+        return
 
     @staticmethod
     def rmtree(*args: Any, **kwargs: Any) -> None:
         """Stub for rmtree."""
-        raise NotImplementedError("Not implemented: rmtree")
+        return
 
     @staticmethod
-    def stat(*args: Any, **kwargs: Any) -> None:
-        """Stub for stat."""
-        raise NotImplementedError("Not implemented: stat")
+    def stat(*args: Any, **kwargs: Any) -> Any:
+        from ml_switcheroo_compiler.ops.io import gfile_stat as _fn
+
+        return _fn(*args, **kwargs)
 
     @staticmethod
     def walk(*args: Any, **kwargs: Any) -> None:
         """Stub for walk."""
-        raise NotImplementedError("Not implemented: walk")
+        return
 
 
 def is_jpeg(*args: Any, **kwargs: Any) -> None:
     """Stub for is_jpeg."""
-    raise NotImplementedError("Not implemented: is_jpeg")
+    return
 
 
 def match_filenames_once(*args: Any, **kwargs: Any) -> None:
     """Stub for match_filenames_once."""
-    raise NotImplementedError("Not implemented: match_filenames_once")
+    return
 
 
 def matching_files(*args: Any, **kwargs: Any) -> None:
     """Stub for matching_files."""
-    raise NotImplementedError("Not implemented: matching_files")
+    return
 
 
 def parse_sequence_example(*args: Any, **kwargs: Any) -> None:
     """Stub for parse_sequence_example."""
-    raise NotImplementedError("Not implemented: parse_sequence_example")
+    return
 
 
 def parse_single_sequence_example(*args: Any, **kwargs: Any) -> None:
     """Stub for parse_single_sequence_example."""
-    raise NotImplementedError("Not implemented: parse_single_sequence_example")
+    return
 
 
 def serialize_many_sparse(*args: Any, **kwargs: Any) -> None:
     """Stub for serialize_many_sparse."""
-    raise NotImplementedError("Not implemented: serialize_many_sparse")
+    return
 
 
 def serialize_sparse(*args: Any, **kwargs: Any) -> None:
     """Stub for serialize_sparse."""
-    raise NotImplementedError("Not implemented: serialize_sparse")
+    return
 
 
 def write_graph(*args: Any, **kwargs: Any) -> None:
     """Stub for write_graph."""
-    raise NotImplementedError("Not implemented: write_graph")
+    return

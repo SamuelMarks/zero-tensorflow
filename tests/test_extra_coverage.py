@@ -1,6 +1,7 @@
+import numpy as np
+
 from zero_tensorflow import _to_tensor
 from zero_tensorflow.nn import softmax
-import numpy as np
 
 
 def test_missing_branches():
@@ -15,8 +16,9 @@ def test_missing_branches():
     softmax(np.array([1.0, 2.0]), axis=0)
 
 
-from zero_tensorflow import Tensor, GradientTape
 import pytest
+
+from zero_tensorflow import GradientTape, Tensor
 
 
 def test_tensor_len():
@@ -58,8 +60,10 @@ def test_gradient_tape_edge_cases():
 
 
 def test_to_tensor_switcheroo_tensor_tracing():
-    from zero_tensorflow import _to_tensor, Tensor
-    from ml_switcheroo_compiler.tracing import _tracer, ProxyTensor
+    from ml_switcheroo_compiler.tracing import ProxyTensor
+    from ml_switcheroo_compiler.tracing.state import global_tracing_state as _tracer
+
+    from zero_tensorflow import Tensor, _to_tensor
 
     prev_tracing = getattr(_tracer, "is_tracing", False)
     prev_graph = getattr(_tracer, "active_graph", None)
@@ -72,7 +76,7 @@ def test_to_tensor_switcheroo_tensor_tracing():
 
     try:
         _tracer.is_tracing = True
-        _tracer.active_graph = type("Graph", (), {"nodes": {}})()
+        _tracer.active_graph = type("Graph", (), {"nodes": {}, "name": None})()
 
         # 1) original_tensor=None -> 43->53, 61->63
         _to_tensor(mls_tensor)
@@ -90,8 +94,9 @@ def test_to_tensor_switcheroo_tensor_tracing():
 
 
 def test_array_on_traced_non_constant():
-    from zero_tensorflow import Tensor, GradientTape
     import pytest
+
+    from zero_tensorflow import GradientTape, Tensor
 
     with GradientTape() as tape:
         t = Tensor(3.0)

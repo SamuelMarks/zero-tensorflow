@@ -1,13 +1,14 @@
-from zero_tensorflow import (
-    Variable,
-    function,
-    GradientTape,
-    data,
-    math,
-    Tensor,
-)
-import zero_tensorflow as tf
 import numpy as np
+
+import zero_tensorflow as tf
+from zero_tensorflow import (
+    GradientTape,
+    Tensor,
+    Variable,
+    data,
+    function,
+    math,
+)
 
 
 def test_variable():

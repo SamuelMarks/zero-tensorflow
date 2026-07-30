@@ -1,7 +1,7 @@
 import tensorflow as tf
+from tensorflow.python.eager import def_function
 from tensorflow.python.framework import test_util
 from tensorflow.python.platform import test
-from tensorflow.python.eager import def_function
 
 
 class DefFunctionTest(test_util.TensorFlowTestCase):

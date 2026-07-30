@@ -84,7 +84,7 @@ def test_tanh():
 
 
 def test_nn_traced():
-    from zero_tensorflow import function, Tensor
+    from zero_tensorflow import Tensor, function
 
     @function
     def nn_f(x):

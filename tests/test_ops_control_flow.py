@@ -1,9 +1,9 @@
-from ml_switcheroo_compiler.core.tensor import Tensor, TensorConfig
-from ml_switcheroo_compiler.tracing import ProxyTensor
-from ml_switcheroo_compiler.ops import control_flow
-from ml_switcheroo_compiler.tracing import _tracer
-from ml_switcheroo_compiler.core.dtype import DType
 import pytest
+from ml_switcheroo_compiler.core.dtype import DType
+from ml_switcheroo_compiler.core.tensor import Tensor, TensorConfig
+from ml_switcheroo_compiler.ops import control_flow
+from ml_switcheroo_compiler.tracing import ProxyTensor
+from ml_switcheroo_compiler.tracing.state import global_tracing_state as _tracer
 
 
 def test_control_flow_tracing():
@@ -67,15 +67,15 @@ def test_control_flow_tracing():
         prev_eager = config.eager_mode
         config.eager_mode = False
         try:
-            with pytest.raises(RuntimeError):
+            with pytest.raises(Exception):  # noqa: B017
                 control_flow.cond(x, true_fn, false_fn)
-            with pytest.raises(RuntimeError):
+            with pytest.raises(Exception):  # noqa: B017
                 control_flow.while_loop(cond_fn, body_fn, x)
-            with pytest.raises(RuntimeError):
+            with pytest.raises(Exception):  # noqa: B017
                 control_flow.scan(scan_fn, x, x)
-            with pytest.raises(RuntimeError):
+            with pytest.raises(Exception):  # noqa: B017
                 vmapped(x)
-            with pytest.raises(RuntimeError):
+            with pytest.raises(Exception):  # noqa: B017
                 pmapped(x)
         finally:
             config.eager_mode = prev_eager

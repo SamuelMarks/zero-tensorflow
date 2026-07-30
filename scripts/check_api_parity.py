@@ -1,8 +1,9 @@
-import json
 import inspect
+import json
 import sys
-import zero_tensorflow as ztf
 import typing
+
+import zero_tensorflow as ztf
 
 
 def check_parity(ztf_obj, tf_snapshot, path="tf"):
@@ -45,14 +46,15 @@ def check_parity(ztf_obj, tf_snapshot, path="tf"):
                 for sub_name, sub_obj in inspect.getmembers(obj):
                     if sub_name.startswith("_"):
                         continue
-                    if callable(sub_obj) or inspect.isclass(sub_obj):
-                        if sub_name not in tf_info.get("contents", {}):
-                            # some exceptions
-                            if sub_name == "pow":
-                                continue
-                            errors.append(
-                                f"Missing in official TF: {path}.{name}.{sub_name}"
-                            )
+                    if (callable(sub_obj) or inspect.isclass(sub_obj)) and (
+                        sub_name not in tf_info.get("contents", {})
+                    ):
+                        # some exceptions
+                        if sub_name == "pow":
+                            continue
+                        errors.append(
+                            f"Missing in official TF: {path}.{name}.{sub_name}"
+                        )
             elif tf_info["type"] == "module":
                 errors.extend(
                     check_parity(obj, tf_info.get("contents", {}), f"{path}.{name}")

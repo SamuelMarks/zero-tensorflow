@@ -1,7 +1,8 @@
 import numpy as np
-from zero_tensorflow import Tensor as ZTensor
+from ml_switcheroo_compiler.core import config
 from ml_switcheroo_compiler.ops import control_flow
-import ml_switcheroo_compiler.core.config as config
+
+from zero_tensorflow import Tensor as ZTensor
 
 
 def test_control_flow_eager():

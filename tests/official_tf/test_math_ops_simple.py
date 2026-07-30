@@ -1,7 +1,8 @@
+import unittest
+
+import numpy as np
 import tensorflow as tf
 from tensorflow.python.framework import test_util
-import numpy as np
-import unittest
 
 
 @test_util.run_all_in_graph_and_eager_modes

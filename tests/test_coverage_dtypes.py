@@ -1,5 +1,6 @@
-from zero_tensorflow import Tensor, _TracingContext
 import numpy as np
+
+from zero_tensorflow import Tensor, _TracingContext
 
 
 def test_tensor_dtypes():
@@ -17,6 +18,7 @@ def test_tensor_dtypes():
     Tensor(np.array("test string"))  # hits the dt_str Exception
 
     from ml_switcheroo_compiler.tracing import ProxyTensor
+
     from zero_tensorflow import _to_tensor
 
     pt = ProxyTensor("test", (), "float32")

@@ -1,6 +1,7 @@
-from zero_tensorflow import _wrap, Tensor, _to_tensor, function
 import ml_switcheroo_compiler
 import numpy as np
+
+from zero_tensorflow import Tensor, _to_tensor, _wrap, function
 
 
 def test_wrap():

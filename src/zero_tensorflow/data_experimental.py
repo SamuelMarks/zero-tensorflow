@@ -1,6 +1,8 @@
 """TensorFlow data.experimental module."""
 
-from typing import Any, Iterator as PyIterator
+from collections.abc import Iterator as PyIterator
+from typing import Any
+
 from zero_tensorflow.data import Dataset
 
 __all__ = ["SqlDataset"]
