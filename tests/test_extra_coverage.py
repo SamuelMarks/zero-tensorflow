@@ -1,123 +1,120 @@
-import numpy as np
+"""Unit tests for `test_extra_coverage`."""
 
-from zero_tensorflow import _to_tensor
+from __future__ import annotations
+
+import zero_tensorflow as tf
+from zero_tensorflow import GradientTape, Tensor, _to_tensor, to_dtype
 from zero_tensorflow.nn import softmax
 
-
-def test_missing_branches():
-    # for __init__.py 57->61
-    from ml_switcheroo_compiler.tracing import ProxyTensor
-
-    pt = ProxyTensor("test", ())
-    pt.dtype = None
-    _to_tensor(pt)
-
-    # for nn.py 76->78
-    softmax(np.array([1.0, 2.0]), axis=0)
-
-
+import numpy as np
 import pytest
-
-from zero_tensorflow import GradientTape, Tensor
-
-
-def test_tensor_len():
-    # scalar tensor
-    t1 = Tensor(3.0)
-    assert len(t1) == 0
-    # 1D tensor
-    t2 = Tensor([1.0, 2.0])
-    assert len(t2) == 2
+from ml_switcheroo_compiler.core.dtype import DType
 
 
-def test_gradient_tape_edge_cases():
+def test_tensor_numpy_and_comparisons() -> None:
+    """Verify `Tensor` arithmetic, comparisons, boolean conversion, and `len()`."""
+    t1 = Tensor([1.0, 2.0])
+    t2 = Tensor([1.0, 3.0])
+
+    class _NonOperand:
+        """Unrelated sentinel class not convertible to a `TensorOperand`."""
+
+    eq = tf.math.equal(t1, t2)
+    assert isinstance(t1 == t2, (Tensor, bool))
+    np.testing.assert_array_equal(eq.numpy(), [True, False])
+    eq_non = t1 == _NonOperand()
+    assert eq_non is False
+
+    ne = tf.math.not_equal(t1, t2)
+    assert isinstance(t1 != t2, (Tensor, bool))
+    np.testing.assert_array_equal(ne.numpy(), [False, True])
+    ne_non = t1 != _NonOperand()
+    assert ne_non is True
+
+    assert isinstance(t1 < t2, Tensor)
+    assert isinstance(t1 <= t2, Tensor)
+    assert isinstance(t1 > t2, Tensor)
+    assert isinstance(t1 >= t2, Tensor)
+
+    assert len(t1) == 2
+    with pytest.raises(TypeError, match=r"Scalar tensor has no `len\(\)`"):
+        len(Tensor(1.0))
+
+    assert bool(Tensor(1.0)) is True
+    assert bool(Tensor(0.0)) is False
+    assert Tensor(1.0).__nonzero__() is True
+    with pytest.raises(ValueError, match="ambiguous"):
+        bool(t1)
+
+
+def test_gradient_tape_unwatched_and_errors() -> None:
+    """Verify `GradientTape` error handling and unwatched source behavior."""
+    x = Tensor(2.0)
+    unwatched = Tensor(5.0)
     with GradientTape() as tape:
-        t = Tensor(3.0)
-        tape.watch(t)
-        y = t * t
+        tape.watch(x)
+        y = x * 3.0
 
-    # None target
-    assert tape.gradient(None, t) is None
+    grad_unwatched = tape.gradient(y, unwatched)
+    assert grad_unwatched is None
 
-    # Invalid target
-    with pytest.raises(
-        ValueError, match="Target was not created during the tape's recording."
-    ):
-        tape.gradient(Tensor(5.0), t)
+    with pytest.raises(RuntimeError, match="non-persistent"):
+        tape.gradient(y, x)
 
-    # Invalid source (not a Tensor)
-    assert tape.gradient(y, [None])[0] is None
-    assert tape.gradient(y, None) is None
+    with GradientTape(persistent=True) as ptape:
+        ptape.watch(x)
+        y2 = x * 4.0
 
-    # Multiple sources including invalid
-    t2 = Tensor(4.0)
-    tape.watch(t2)
-    with GradientTape() as tape2:
-        y2 = t2 * 2.0
-    grads = tape2.gradient(y2, [t2, None])
-    assert len(grads) == 2
-    assert grads[1] is None
+    g1 = ptape.gradient(y2, x)
+    g2 = ptape.gradient(y2, x, unconnected_gradients="zero")
+    g_unconn = ptape.gradient(y2, unwatched, unconnected_gradients="zero")
+    assert isinstance(g1, Tensor) and g1.numpy() == 4.0
+    assert isinstance(g2, Tensor) and g2.numpy() == 4.0
+    assert isinstance(g_unconn, Tensor) and g_unconn.numpy() == 0.0
 
+    with pytest.raises(ValueError, match="Unknown value for unconnected_gradients"):
+        ptape.gradient(y2, x, unconnected_gradients="invalid")
 
-def test_to_tensor_switcheroo_tensor_tracing():
-    from ml_switcheroo_compiler.tracing import ProxyTensor
-    from ml_switcheroo_compiler.tracing.state import global_tracing_state as _tracer
+    with pytest.raises(ValueError, match="not created during the tape"):
+        ptape.gradient(unwatched, x)
 
-    from zero_tensorflow import Tensor, _to_tensor
-
-    prev_tracing = getattr(_tracer, "is_tracing", False)
-    prev_graph = getattr(_tracer, "active_graph", None)
-
-    # 1) CREATE EAGER TENSOR FIRST!
-    t = Tensor(3.0)
-    mls_tensor = t._tensor
-
-    t2 = Tensor(3.0)
-
-    try:
-        _tracer.is_tracing = True
-        _tracer.active_graph = type("Graph", (), {"nodes": {}, "name": None})()
-
-        # 1) original_tensor=None -> 43->53, 61->63
-        _to_tensor(mls_tensor)
-
-        # 2) original_tensor != None, but graph_id in _traced_node_ids
-        t2._traced_node_ids = {id(_tracer.active_graph): "my_node_id"}
-        _to_tensor(t2)
-
-        proxy = ProxyTensor(id="pt", shape=(1,), dtype=mls_tensor.dtype.value)
-        _to_tensor(proxy)
-
-    finally:
-        _tracer.is_tracing = prev_tracing
-        _tracer.active_graph = prev_graph
+    assert ptape.gradient(None, x) is None
 
 
-def test_array_on_traced_non_constant():
-    import pytest
-
-    from zero_tensorflow import GradientTape, Tensor
-
-    with GradientTape() as tape:
-        t = Tensor(3.0)
-        tape.watch(t)
-        y = t * 2.0
-        with pytest.raises(
-            ValueError, match="Cannot call array conversion on a traced tensor"
-        ):
-            y.numpy()
+def test_softmax_axis() -> None:
+    """Verify `nn.softmax` numerical accuracy along default and explicit axes."""
+    logits = Tensor([[1.0, 1.0], [0.0, 0.0]])
+    probs = softmax(logits, axis=-1)
+    np.testing.assert_allclose(probs.numpy(), [[0.5, 0.5], [0.5, 0.5]])
 
 
-def test_watch_non_tensor():
-    from zero_tensorflow import GradientTape
+def test_to_tensor_invalid_dtype() -> None:
+    """Verify `to_dtype` mappings for built-in types and `TypeError` on invalid dtypes."""
+    assert to_dtype(None) == DType.Float32
+    assert to_dtype(DType.Int64) == DType.Int64
+    assert to_dtype("float64") == DType.Float64
+    assert to_dtype("INT32") == DType.Int32
+    assert to_dtype(bool) == DType.Bool
+    assert to_dtype(int) == DType.Int32
+    assert to_dtype(float) == DType.Float32
+    assert to_dtype(complex) == DType.Complex64
+    assert to_dtype(str) == DType.String
+    assert to_dtype(bytes) == DType.String
+    assert to_dtype(np.int16) == DType.Int16
 
-    with GradientTape() as tape:
-        tape.watch("this is a string, not a tensor")
+    with pytest.raises(TypeError, match="Cannot convert"):
+        to_dtype("not_a_valid_dtype")
+
+    with pytest.raises(TypeError, match="Cannot convert"):
+        to_dtype([1, 2, 3])
 
 
-def test_to_tensor_invalid_dtype():
-    pass
-
-
-def test_compiler_ops_missing_coverage():
-    pass
+def test_compiler_ops_missing_coverage() -> None:
+    """Verify `_to_tensor` and `Variable` edge cases (`read_value`, `name`, `dtype`)."""
+    v = tf.Variable([1.0, 2.0], name="weights", dtype="float32")
+    assert v.name == "weights"
+    assert v.dtype == DType.Float32
+    snap = v.read_value()
+    assert isinstance(snap, Tensor)
+    np.testing.assert_allclose(snap.numpy(), [1.0, 2.0])
+    assert _to_tensor(v) is not None

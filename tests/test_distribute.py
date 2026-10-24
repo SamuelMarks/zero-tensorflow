@@ -1,45 +1,57 @@
+"""Unit tests for `test_distribute`."""
+
+from __future__ import annotations
+
 from zero_tensorflow import distribute
+from zero_tensorflow._typing import TensorOperand
 
 
-def test_reduce_op():
+def test_reduce_op() -> None:
+    """Execute `test_reduce_op`."""
     assert distribute.ReduceOp.SUM == "SUM"
     assert distribute.ReduceOp.MEAN == "MEAN"
 
 
-def test_strategy_base():
+def test_strategy_base() -> None:
+    """Execute `test_strategy_base`."""
     strat = distribute.Strategy()
-
-    # scope
     with strat.scope() as s:
         assert s is strat
         assert distribute._strategy_state.current is strat
+    curr: distribute.Strategy | None = distribute._strategy_state.current
+    assert curr is None
 
-    assert distribute._strategy_state.current is None
+    def dummy_fn(*args: TensorOperand, **kwargs: TensorOperand) -> TensorOperand:
+        """Execute `dummy_fn`.
 
-    # run
-    def dummy_fn(x, y=0):
-        return x + y
+        Args:
+            *args: Positional arguments.
+            **kwargs: Keyword arguments.
+
+        Returns:
+            TensorOperand: Computed result.
+        """
+        x = args[0] if args else 0
+        y = kwargs.get("y", 0)
+        return (int(x) if isinstance(x, int) else 0) + (int(y) if isinstance(y, int) else 0)
 
     assert strat.run(dummy_fn, args=(5,), kwargs={"y": 3}) == 8
     assert strat.run(dummy_fn, args=(5,)) == 5
-
-    # reduce
     assert strat.reduce(distribute.ReduceOp.SUM, 10) == 10
 
 
-def test_mirrored_strategy():
+def test_mirrored_strategy() -> None:
+    """Execute `test_mirrored_strategy`."""
     strat = distribute.MirroredStrategy()
     assert strat._devices == ["/job:localhost/replica:0/task:0/device:GPU:0"]
     assert strat._cross_device_ops is None
-
-    strat2 = distribute.MirroredStrategy(
-        devices=["/cpu:0", "/cpu:1"], cross_device_ops="ops"
-    )
+    strat2 = distribute.MirroredStrategy(devices=["/cpu:0", "/cpu:1"], cross_device_ops="ops")
     assert strat2._devices == ["/cpu:0", "/cpu:1"]
     assert strat2._cross_device_ops == "ops"
 
 
-def test_multi_worker_mirrored_strategy():
+def test_multi_worker_mirrored_strategy() -> None:
+    """Execute `test_multi_worker_mirrored_strategy`."""
     strat = distribute.MultiWorkerMirroredStrategy(
         cluster_resolver="resolver", communication_options="options"
     )
@@ -47,11 +59,13 @@ def test_multi_worker_mirrored_strategy():
     assert strat._communication_options == "options"
 
 
-def test_one_device_strategy():
+def test_one_device_strategy() -> None:
+    """Execute `test_one_device_strategy`."""
     strat = distribute.OneDeviceStrategy("/gpu:0")
     assert strat._device == "/gpu:0"
 
 
-def test_tpu_strategy():
+def test_tpu_strategy() -> None:
+    """Execute `test_tpu_strategy`."""
     strat = distribute.TPUStrategy(tpu_cluster_resolver="tpu_resolver")
     assert strat._tpu_cluster_resolver == "tpu_resolver"

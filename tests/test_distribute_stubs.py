@@ -1,19 +1,35 @@
+"""Unit tests for `test_distribute_stubs`."""
+
+from __future__ import annotations
+
 import zero_tensorflow.distribute as dist
+from zero_tensorflow._typing import CallableOperandProtocol, TensorOperand
 
 
-def call_safely(callable_obj):
+def call_safely(callable_obj: CallableOperandProtocol | TensorOperand | type) -> TensorOperand:
+    """Invoke `callable_obj` safely with zero or one `None` argument.
+
+    Args:
+        callable_obj: Target class or function.
+
+    Returns:
+        TensorOperand: Result of calling `callable_obj` or `None`.
+    """
+    if not callable(callable_obj):
+        return None
     try:
-        return callable_obj()
+        res: TensorOperand = callable_obj()
+        return res
     except TypeError:
         try:
-            return callable_obj(None)
+            res2: TensorOperand = callable_obj(None)
+            return res2
         except TypeError:
-            pass
-    return None
+            return None
 
 
-def test_distribute_stubs():
-    assert call_safely(dist.Callable) is None
+def test_distribute_stubs() -> None:
+    """Verify `tf.distribute` strategies, resolvers, coordinators, and context functions."""
     assert call_safely(dist.CrossDeviceOps) is not None
     assert call_safely(dist.DistributedDataset) is not None
     assert call_safely(dist.DistributedIterator) is not None
@@ -31,7 +47,6 @@ def test_distribute_stubs():
     assert call_safely(dist.ReductionToOneDevice) is not None
     assert call_safely(dist.ReplicaContext) is not None
     assert call_safely(dist.RunOptions) is not None
-    assert call_safely(dist.Sequence) is None
     assert call_safely(dist.Server) is not None
     assert call_safely(dist.Strategy) is not None
     assert call_safely(dist.StrategyExtended) is not None
@@ -39,11 +54,11 @@ def test_distribute_stubs():
     assert call_safely(dist.cluster_resolver) is not None
     assert call_safely(dist.coordinator) is not None
     assert call_safely(dist.experimental) is not None
-    assert call_safely(dist.experimental_set_strategy) is None
-    assert call_safely(dist.get_replica_context) is None
-    assert call_safely(dist.get_strategy) is None
-    assert call_safely(dist.has_strategy) is None
-    assert call_safely(dist.in_cross_replica_context) is None
+    dist.experimental_set_strategy(None)
+    assert dist.get_replica_context() is None
+    assert isinstance(dist.get_strategy(), dist.Strategy)
+    assert dist.has_strategy() is False
+    assert dist.in_cross_replica_context() is True
     assert call_safely(dist.experimental.CentralStorageStrategy) is not None
     assert call_safely(dist.experimental.CollectiveCommunication) is not None
     assert call_safely(dist.experimental.CollectiveHints) is not None

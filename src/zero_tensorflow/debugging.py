@@ -1,17 +1,31 @@
-"""Stub module for debugging."""
+"""TensorFlow debugging utilities module."""
 
-from typing import Any
+from __future__ import annotations
+
+from zero_tensorflow._typing import TensorOperand
+
+__all__ = ["experimental"]
 
 
 class experimental:
-    """Stub for experimental module."""
+    """Experimental debugging APIs."""
 
     @staticmethod
-    def disable_dump_debug_info(*args: Any, **kwargs: Any) -> None:
-        """Stub for disable_dump_debug_info."""
+    def disable_dump_debug_info(*args: TensorOperand, **kwargs: TensorOperand) -> None:
+        """Disable dumping of execution debug information.
+
+        Args:
+            *args: Positional arguments.
+            **kwargs: Keyword arguments.
+        """
         return
 
     @staticmethod
-    def enable_dump_debug_info(*args: Any, **kwargs: Any) -> None:
-        """Stub for enable_dump_debug_info."""
+    def enable_dump_debug_info(*args: TensorOperand, **kwargs: TensorOperand) -> None:
+        """Enable dumping of execution debug information to disk.
+
+        Args:
+            *args: Positional arguments.
+            **kwargs: Keyword arguments.
+        """
         return

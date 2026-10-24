@@ -1,42 +1,86 @@
-"""Stub module for quantization."""
+"""TensorFlow model quantization module."""
 
-from typing import Any
+from __future__ import annotations
+
+from zero_tensorflow._typing import TensorOperand
+
+__all__ = ["experimental"]
 
 
 class experimental:
-    """Stub for experimental module."""
+    """Experimental quantization specifications and options."""
 
     class QuantizationComponentSpec:
-        """Stub for QuantizationComponentSpec."""
+        """Specification for quantizing a specific model component."""
 
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
+        def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
+            """Initialize `QuantizationComponentSpec`.
+
+            Args:
+                *args: Positional component specification arguments.
+                **kwargs: Keyword component specification arguments.
+            """
+            self.args = args
+            self.kwargs = kwargs
 
     class QuantizationMethod:
-        """Stub for QuantizationMethod."""
+        """Quantization scheme configuration."""
 
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
+        def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
+            """Initialize `QuantizationMethod`.
+
+            Args:
+                *args: Positional quantization method arguments.
+                **kwargs: Keyword quantization method arguments.
+            """
+            self.args = args
+            self.kwargs = kwargs
 
     class QuantizationOptions:
-        """Stub for QuantizationOptions."""
+        """Configuration options for SavedModel quantization."""
 
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
+        def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
+            """Initialize `QuantizationOptions`.
+
+            Args:
+                *args: Positional quantization option arguments.
+                **kwargs: Keyword quantization option arguments.
+            """
+            self.args = args
+            self.kwargs = kwargs
 
     class TfRecordRepresentativeDatasetSaver:
-        """Stub for TfRecordRepresentativeDatasetSaver."""
+        """Saves representative calibration datasets in TFRecord format."""
 
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            return None
+        def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
+            """Initialize `TfRecordRepresentativeDatasetSaver`.
+
+            Args:
+                *args: Positional dataset saver arguments.
+                **kwargs: Keyword dataset saver arguments.
+            """
+            self.args = args
+            self.kwargs = kwargs
 
     class UnitWiseQuantizationSpec:
-        """Stub for UnitWiseQuantizationSpec."""
+        """Per-unit or per-channel quantization specification."""
 
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
+        def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
+            """Initialize `UnitWiseQuantizationSpec`.
+
+            Args:
+                *args: Positional unit specification arguments.
+                **kwargs: Keyword unit specification arguments.
+            """
+            self.args = args
+            self.kwargs = kwargs
 
     @staticmethod
-    def quantize_saved_model(*args: Any, **kwargs: Any) -> None:
-        """Stub for quantize_saved_model."""
+    def quantize_saved_model(*args: TensorOperand, **kwargs: TensorOperand) -> None:
+        """Quantize a SavedModel according to provided quantization options.
+
+        Args:
+            *args: Positional arguments.
+            **kwargs: Keyword arguments.
+        """
         return

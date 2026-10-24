@@ -1,65 +1,84 @@
+"""Unit tests for `test_strings`."""
+
+from __future__ import annotations
+
 from zero_tensorflow import strings
+from zero_tensorflow._typing import TensorOperand
 
 
-def test_strings_join():
+def test_strings_join() -> None:
+    """Execute `test_strings_join`."""
     res = strings.join(["a", "b"], separator=",")
     assert str(res) == "a,b"
 
 
-def test_strings_split():
+def test_strings_split() -> None:
+    """Execute `test_strings_split`."""
     res = strings.split("a b c")
-    assert list(res) == ["a", "b", "c"]
+    assert isinstance(res, list) and list(res) == ["a", "b", "c"]
 
 
-def test_strings_length():
+def test_strings_length() -> None:
+    """Execute `test_strings_length`."""
     res = strings.length("abc")
     assert res == 3
 
 
-def test_strings_regex_replace():
+def test_strings_regex_replace() -> None:
+    """Execute `test_strings_regex_replace`."""
     res = strings.regex_replace("a b c", " ", "_")
     assert str(res) == "a_b_c"
 
 
-def test_strings_regex_full_match():
+def test_strings_regex_full_match() -> None:
+    """Execute `test_strings_regex_full_match`."""
     assert strings.regex_full_match("a", "a")
     assert not strings.regex_full_match("a", "b")
 
 
-def test_strings_to_number():
+def test_strings_to_number() -> None:
+    """Execute `test_strings_to_number`."""
     res = strings.to_number("1.5")
     assert res == 1.5
 
 
-def test_strings_bytes_split():
+def test_strings_bytes_split() -> None:
+    """Execute `test_strings_bytes_split`."""
     res = strings.bytes_split("abc")
-    assert list(res) == ["a", "b", "c"]
+    assert isinstance(res, list) and list(res) == ["a", "b", "c"]
 
 
-def test_strings_format():
+def test_strings_format() -> None:
+    """Execute `test_strings_format`."""
     res = strings.format("{} b {}", ["a", "c"])
     assert str(res) == "a b c"
 
 
-def test_strings_lower_upper():
+def test_strings_lower_upper() -> None:
+    """Execute `test_strings_lower_upper`."""
     assert str(strings.lower("A")) == "a"
     assert str(strings.upper("a")) == "A"
 
 
-def test_strings_strip():
-    assert str(strings.strip(" a ")) == "a"  # noqa: B005
+def test_strings_strip() -> None:
+    """Execute `test_strings_strip`."""
+    padded = " a "
+    assert str(strings.strip(padded)) == "a"
 
 
-def test_strings_substr():
+def test_strings_substr() -> None:
+    """Execute `test_strings_substr`."""
     assert str(strings.substr("abc", 1, 1)) == "b"
 
 
-def test_strings_to_hash_bucket():
+def test_strings_to_hash_bucket() -> None:
+    """Execute `test_strings_to_hash_bucket`."""
     res = strings.to_hash_bucket("a", 10)
-    assert 0 <= res < 10
+    assert isinstance(res, int) and 0 <= res < 10
 
 
-def test_strings_stubs_exist():
+def test_strings_stubs_exist() -> None:
+    """Execute `test_strings_stubs_exist`."""
     strings.ngrams([], 1)
     strings.reduce_join([])
     strings.to_hash_bucket_fast("a", 10)
@@ -75,53 +94,64 @@ def test_strings_stubs_exist():
 
 
 class MockTensor:
-    def __init__(self, val):
+    """Test helper class `MockTensor`."""
+
+    def __init__(self, val: TensorOperand) -> None:
+        """Execute `__init__`.
+
+        Args:
+            val: Parameter `val`.
+        """
         self.val = val
 
-    def numpy(self):
+    def numpy(self) -> TensorOperand:
+        """Execute `numpy`.
+
+        Returns:
+            TensorOperand: Computed result.
+        """
         return self.val
 
 
-def test_strings_coverage_extras():
-    # Hit line 37: hasattr(val, "numpy")
+def test_strings_coverage_extras() -> None:
+    """Execute `test_strings_coverage_extras`."""
     res = strings.length(MockTensor("abc"))
     assert res == 3
-
-    # Hit line 48: if not inputs_np
     res = strings.join([])
     assert str(res) == ""
-
-    # Hit split 0-d
     res = strings.split(MockTensor("a b"))
-    assert list(res) == ["a", "b"]
-
+    assert isinstance(res, list) and list(res) == ["a", "b"]
     res = strings.bytes_split(MockTensor("ab"))
-    assert list(res) == ["a", "b"]
+    assert isinstance(res, list) and list(res) == ["a", "b"]
 
 
-def test_strings_split_array():
+def test_strings_split_array() -> None:
+    """Execute `test_strings_split_array`."""
     res = strings.split(["a b", "c d"])
-    assert len(res) == 2
-    assert list(res[0]) == ["a", "b"]
+    assert isinstance(res, list) and len(res) == 2
+    assert isinstance(res[0], list) and list(res[0]) == ["a", "b"]
 
 
-def test_strings_bytes_split_array():
+def test_strings_bytes_split_array() -> None:
+    """Execute `test_strings_bytes_split_array`."""
     res = strings.bytes_split(["ab", "cd"])
-    assert len(res) == 2
-    assert list(res[0]) == ["a", "b"]
+    assert isinstance(res, list) and len(res) == 2
+    assert isinstance(res[0], list) and list(res[0]) == ["a", "b"]
 
 
-def test_strings_is_tracing():
+def test_strings_is_tracing() -> None:
+    """Execute `test_strings_is_tracing`."""
+
     class TracingTensor:
+        """Test helper class `TracingTensor`."""
+
         shape = ()
         dtype = "str"
 
     t = TracingTensor()
-
     from ml_switcheroo_compiler.core import config
 
     config.eager_mode = False
-
     try:
         strings.join([t])
         strings.split(t)
@@ -136,7 +166,15 @@ def test_strings_is_tracing():
         strings.substr(t, 0, 1)
         strings.to_hash_bucket(t, 10)
         strings.upper(t)
-    except Exception:  # noqa: BLE001, S110
+    except (
+        ValueError,
+        TypeError,
+        AttributeError,
+        RuntimeError,
+        NotImplementedError,
+        KeyError,
+        IndexError,
+    ):
         pass
     finally:
         config.eager_mode = True

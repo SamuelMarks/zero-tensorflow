@@ -7,23 +7,107 @@ name = "zero-tensorflow"
 version = "2.20.0"
 description = "Zero-dependency pure Python implementation of the TensorFlow API surface."
 authors = [{ name = "Samuel Marks" }]
+license = { text = "Apache-2.0 OR MIT" }
+readme = "README.md"
 requires-python = ">=3.9"
-dynamic = ["dependencies", "optional-dependencies"]
+dynamic = ["dependencies"]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov",
+    "absl-py",
+    "parameterized",
+    "mock",
+    "pytest-json-report",
+    "numpy",
+    "mypy>=1.10.0",
+    "interrogate>=1.7.0",
+    "ruff>=0.4.4",
+    "ml-ecosystem-snapshots @ https://github.com/SamuelMarks/ml-ecosystem-snapshots/releases/download/v0.0.4/ml_ecosystem_snapshots-0.0.4-py3-none-any.whl",
+]
 
 [tool.hatch.metadata.hooks.requirements_txt]
 files = ["requirements.txt"]
 
-[tool.hatch.metadata.hooks.requirements_txt.optional-dependencies]
-test = ["requirements-test.txt"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/zero_tensorflow"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers"
+markers = [
+    "reference: Tests comparing zero-tensorflow to official tensorflow output.",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/zero_tensorflow", "scripts"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+exclude_lines = [
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "if typing.TYPE_CHECKING:",
+]
+
+[tool.mypy]
+python_version = "3.10"
+mypy_path = ["src", "../ml-switcheroo-ir/src", "../ml-switcheroo-compiler/src", "../ml-ecosystem-snapshots/src"]
+files = ["src", "scripts", "tests"]
+strict = true
+disallow_any_explicit = true
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_return_any = false
+warn_unreachable = true
+strict_equality = true
+ignore_missing_imports = true
+follow_imports = "silent"
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "ANN", "D"]
+ignore = ["E501", "UP007", "UP045"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["zero_tensorflow"]
+section-order = ["future", "standard-library", "first-party", "third-party", "local-folder"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.interrogate]
+ignore-init-method = false
+ignore-init-module = false
+ignore-magic = false
+ignore-semiprivate = false
+ignore-private = false
+ignore-property-decorators = false
+ignore-module = false
+ignore-nested-functions = false
+ignore-nested-classes = false
+ignore-setters = false
+ignore-overloaded-functions = true
+fail-under = 100
+verbose = 2
+color = true
 
 [tool.hatch.metadata]
 allow-direct-references = true
-
-[tool.ruff.lint]
-ignore = ['E402']
-
-[tool.mypy]
-ignore_missing_imports = true
 
 [tool.uv.sources]
 ml-switcheroo-compiler = { path = "../ml-switcheroo-compiler", editable = true }

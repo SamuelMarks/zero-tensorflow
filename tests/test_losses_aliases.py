@@ -1,11 +1,6 @@
-from zero_keras.losses import (
-    kl_divergence,
-    log_cosh,
-    mean_absolute_error,
-    mean_absolute_percentage_error,
-    mean_squared_error,
-    mean_squared_logarithmic_error,
-)
+"""Unit tests for `test_losses_aliases`."""
+
+from __future__ import annotations
 
 from zero_tensorflow.losses import (
     KLD,
@@ -23,15 +18,26 @@ from zero_tensorflow.losses import (
     msle,
 )
 
+from zero_keras.losses import (
+    kl_divergence,
+    log_cosh,
+    mean_absolute_error,
+    mean_absolute_percentage_error,
+    mean_squared_error,
+    mean_squared_logarithmic_error,
+)
 
-def test_reduction_enum():
+
+def test_reduction_enum() -> None:
+    """Execute `test_reduction_enum`."""
     assert Reduction.AUTO.value == "auto"
     assert Reduction.NONE.value == "none"
     assert Reduction.SUM.value == "sum"
     assert Reduction.SUM_OVER_BATCH_SIZE.value == "sum_over_batch_size"
 
 
-def test_loss_aliases():
+def test_loss_aliases() -> None:
+    """Execute `test_loss_aliases`."""
     assert kld is kl_divergence
     assert kullback_leibler_divergence is kl_divergence
     assert logcosh is log_cosh
@@ -39,7 +45,6 @@ def test_loss_aliases():
     assert mape is mean_absolute_percentage_error
     assert mse is mean_squared_error
     assert msle is mean_squared_logarithmic_error
-
     assert KLD is kl_divergence
     assert MAE is mean_absolute_error
     assert MAPE is mean_absolute_percentage_error

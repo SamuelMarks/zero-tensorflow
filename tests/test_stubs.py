@@ -1,49 +1,65 @@
+"""Unit tests for `test_stubs`."""
+
+from __future__ import annotations
+
+import contextlib
 import inspect
+import types
 
 import zero_tensorflow as tf
+from zero_tensorflow._typing import TensorOperand
+
+_SUPPRESSED_ERRORS = (
+    ValueError,
+    TypeError,
+    AttributeError,
+    RuntimeError,
+    NotImplementedError,
+    KeyError,
+    IndexError,
+)
 
 
-def _call_stubs(obj, visited=None):
+def _call_stubs(
+    obj: types.ModuleType | type | TensorOperand,
+    visited: set[int] | None = None,
+) -> None:
+    """Recursively invoke zero-argument functions and staticmethods on `obj`.
+
+    Args:
+        obj: Target module or class to traverse.
+        visited: Set of already-visited object IDs.
+    """
     if visited is None:
         visited = set()
     if id(obj) in visited:
         return
     visited.add(id(obj))
-
-    for name in dir(obj):
-        if name.startswith("_"):
-            continue
-        try:
-            attr = getattr(obj, name)
-        except Exception:  # noqa: BLE001, S112
-            continue
-
-        if (
-            inspect.isfunction(attr)
-            or inspect.ismethod(attr)
-            or isinstance(attr, staticmethod)
+    if not isinstance(obj, (types.ModuleType, type)):
+        return
+    for name, attr in inspect.getmembers(obj):
+        if name.startswith("_") or name in (
+            "update_forward_refs",
+            "from_orm",
+            "parse_obj",
+            "parse_raw",
+            "parse_file",
+            "validate",
+            "construct",
+            "copy",
+            "dict",
+            "json",
+            "schema",
+            "schema_json",
         ):
-            try:
+            continue
+        if inspect.isfunction(attr) or inspect.ismethod(attr):
+            with contextlib.suppress(*_SUPPRESSED_ERRORS):
                 attr()
-            except NotImplementedError:
-                pass
-            except Exception:  # noqa: BLE001, S110
-                pass
         elif inspect.isclass(attr):
             _call_stubs(attr, visited)
 
-            # also try calling class methods that might be bound
-            for n, v in inspect.getmembers(attr):
-                if n.startswith("_"):
-                    continue
-                if inspect.isfunction(v) or inspect.ismethod(v):
-                    try:
-                        v()
-                    except NotImplementedError:
-                        pass
-                    except Exception:  # noqa: BLE001, S110
-                        pass
 
-
-def test_stubs():
+def test_stubs() -> None:
+    """Verify all stub classes and functions across `zero_tensorflow`."""
     _call_stubs(tf)

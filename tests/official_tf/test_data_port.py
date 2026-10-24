@@ -1,15 +1,20 @@
-import tensorflow as tf
-from tensorflow.python.framework import test_util
-from tensorflow.python.platform import test
+"""Ported `tf.data.Dataset` unit tests."""
+
+from __future__ import annotations
+
+import zero_tensorflow as tf
+from tests.conftest import TensorFlowTestCase
 
 
-class DatasetTest(test_util.TensorFlowTestCase):
-    def testFromTensorSlices(self):
+class DatasetTest(TensorFlowTestCase):
+    """Ported `Dataset` pipeline test case."""
+
+    def testFromTensorSlices(self) -> None:
+        """Verify chaining `batch`, `map`, and `shuffle` on `from_tensor_slices`."""
         ds = tf.data.Dataset.from_tensor_slices([1, 2, 3])
-        ds = ds.batch(2).map(lambda x: x).shuffle(10)
-        self.assertTrue(isinstance(ds, tf.data.Dataset))
-        # We aren't doing graph iteration for now as the current zero_tensorflow Dataset API is just a stub for tracking.
-
-
-if __name__ == "__main__":
-    test.main()
+        ds = ds.batch(2).map(lambda x: x).shuffle(10, seed=42)
+        self.assertIsInstance(ds, tf.data.Dataset)
+        batches = list(ds)
+        self.assertEqual(len(batches), 2)
+        self.assertIn([1, 2], batches)
+        self.assertIn([3], batches)

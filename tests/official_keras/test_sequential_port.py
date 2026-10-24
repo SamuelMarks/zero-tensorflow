@@ -1,18 +1,22 @@
-from tensorflow.python.framework import test_util
-from tensorflow.python.platform import test
+"""Ported `Sequential` model unit tests."""
+
+from __future__ import annotations
+
+import zero_tensorflow as tf
+from tests.conftest import TensorFlowTestCase
+from zero_tensorflow import keras
 
 
-class SequentialTest(test_util.TensorFlowTestCase):
-    def test_sequential_basic(self):
-        from tensorflow.keras import layers, models
+class SequentialTest(TensorFlowTestCase):
+    """Ported `Sequential` model test case."""
 
-        model = models.Sequential([layers.Dense(2, activation="relu"), layers.Dense(1)])
-
-        # Build manually since zero-keras is an API shell
+    def test_sequential_basic(self) -> None:
+        """Verify `Sequential` layer stacking, `build`, and forward call behavior."""
+        model = keras.models.Sequential(
+            [keras.layers.Dense(2, activation="relu"), keras.layers.Dense(1)]
+        )
         model.build((None, 2))
         self.assertEqual(len(model.layers), 2)
         self.assertTrue(model.built)
-
-
-if __name__ == "__main__":
-    test.main()
+        out = tf.Tensor(model(tf.Tensor([[1.0, 2.0]])._tensor))
+        self.assertEqual(out.shape, (1, 1))

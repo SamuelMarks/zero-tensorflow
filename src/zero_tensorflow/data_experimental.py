@@ -1,46 +1,7 @@
-"""TensorFlow data.experimental module."""
+"""TensorFlow `data.experimental` module."""
 
-from collections.abc import Iterator as PyIterator
-from typing import Any
+from __future__ import annotations
 
-from zero_tensorflow.data import Dataset
+from zero_tensorflow.data import _SqlDatasetImpl as SqlDataset
 
 __all__ = ["SqlDataset"]
-
-
-class SqlDataset(Dataset):
-    """
-    Dataset from SQL query.
-
-    Args:
-        driver_name: Database driver.
-        data_source_name: Connection string.
-        query: SQL query.
-        output_types: Types of columns.
-    """
-
-    def __init__(
-        self,
-        driver_name: str,
-        data_source_name: str,
-        query: str,
-        output_types: Any,
-        *args: Any,
-        **kwargs: Any,
-    ):
-        """
-        Initialize the object.
-
-        Args:
-            *args: Variable length argument list.
-            **kwargs: Arbitrary keyword arguments.
-        """
-        self.driver_name = driver_name
-        self.data_source_name = data_source_name
-        self.query = query
-        self.output_types = output_types
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-
-    def _generator(self) -> PyIterator[Any]:
-        yield ()

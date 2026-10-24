@@ -1,12 +1,21 @@
-"""Stub module for test."""
+"""TensorFlow testing utilities module."""
 
-from typing import Any
+from __future__ import annotations
+
+from zero_tensorflow._typing import TensorOperand
+
+__all__ = ["experimental"]
 
 
 class experimental:
-    """Stub for experimental module."""
+    """Experimental testing utilities."""
 
     @staticmethod
-    def sync_devices(*args: Any, **kwargs: Any) -> None:
-        """Stub for sync_devices."""
+    def sync_devices(*args: TensorOperand, **kwargs: TensorOperand) -> None:
+        """Synchronize all active compute devices.
+
+        Args:
+            *args: Positional arguments.
+            **kwargs: Keyword arguments.
+        """
         return

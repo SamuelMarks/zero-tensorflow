@@ -1,14 +1,19 @@
-from tensorflow.python.framework import test_util
-from tensorflow.python.platform import test
+"""Ported `Metrics` unit tests."""
+
+from __future__ import annotations
+
+import zero_tensorflow as tf
+from tests.conftest import TensorFlowTestCase
+from zero_tensorflow import keras
 
 
-class MetricsTest(test_util.TensorFlowTestCase):
-    def test_accuracy_basic(self):
-        from tensorflow.keras import metrics
+class MetricsTest(TensorFlowTestCase):
+    """Ported metric test case."""
 
-        acc = metrics.Accuracy()
+    def test_accuracy_basic(self) -> None:
+        """Verify `Accuracy` metric instantiation, `update_state`, and `result`."""
+        acc = keras.metrics.Accuracy()
         self.assertIsNotNone(acc)
-
-
-if __name__ == "__main__":
-    test.main()
+        acc.update_state(tf.Tensor([1, 0, 1, 1]), tf.Tensor([1, 0, 0, 1]))
+        res = tf.Tensor(acc.result())
+        self.assertAllClose(res, 0.75)

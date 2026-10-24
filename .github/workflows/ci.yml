@@ -13,38 +13,67 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v4
+
+    - name: Checkout ml-switcheroo-ir
+      uses: actions/checkout@v4
+      with:
+        repository: SamuelMarks/ml-switcheroo-ir
+        path: ../ml-switcheroo-ir
+
+    - name: Checkout ml-switcheroo-compiler
+      uses: actions/checkout@v4
+      with:
+        repository: SamuelMarks/ml-switcheroo-compiler
+        path: ../ml-switcheroo-compiler
+
+    - name: Checkout zero-keras
+      uses: actions/checkout@v4
+      with:
+        repository: SamuelMarks/zero-keras
+        path: ../zero-keras
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.12'
+        python-version: '3.11'
 
-    - name: Install Dependencies
+    - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install ruff pytest pytest-cov build
-        if [ -f "pyproject.toml" ]; then pip install -e .[test]; fi
-        if [ -f "requirements.txt" ]; then pip install -r requirements.txt; fi
-        if [ -f "requirements-test.txt" ]; then pip install -r requirements-test.txt; fi
+        pip install build pytest pytest-cov ruff mypy interrogate
+        pip install -e ../ml-switcheroo-ir
+        pip install -e ../ml-switcheroo-compiler
+        pip install -e ../zero-keras
+        pip install "ml-ecosystem-snapshots @ https://github.com/SamuelMarks/ml-ecosystem-snapshots/releases/download/v0.0.4/ml_ecosystem_snapshots-0.0.4-py3-none-any.whl"
+        pip install -r requirements-test.txt
+        pip install -e .
 
-    - name: Check Code Formatting (Ruff)
-      run: ruff format --check .
-
-    - name: Check Linting (Ruff)
-      run: ruff check .
-
-    - name: Test & Coverage
+    - name: Lint and Format Check (Ruff)
       run: |
-        env PYTHONPATH=src pytest --cov=src --cov-report=xml
-        
-    - name: Update Badges
-      run: |
-        python scripts/update_badges.py
-        if ! git diff --exit-code README.md; then
-          echo "Coverage badges in README.md are out of date. Please run pre-commit or the update badges script locally and commit the changes."
-          exit 1
-        fi
+        ruff format --check .
+        ruff check .
+
+    - name: Check Docstring Coverage (Interrogate)
+      run: interrogate -vv -f 100 -M -i -c pyproject.toml src scripts tests
+
+    - name: Static Type Check (Mypy)
+      run: mypy --config-file pyproject.toml src scripts tests
+
+    - name: Check Disallowed 3rd-Party Imports
+      run: python3 scripts/check_imports.py
+
+    - name: Check API Parity
+      run: python3 scripts/check_api_parity.py
+
+    - name: Run Unit Tests and Enforce 100% Coverage
+      run: pytest --cov=src/zero_tensorflow --cov=scripts --cov-branch --cov-report=term-missing --cov-fail-under=100 -m "not reference"
+
+    - name: Run Reference Parity Tests
+      run: pytest -m "reference"
+
+    - name: Verify README Coverage Badges
+      run: python3 scripts/update_badges.py --enforce
 
     - name: Build Package
       run: python -m build

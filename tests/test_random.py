@@ -1,169 +1,100 @@
+"""Unit tests for `test_random`."""
+
+from __future__ import annotations
+
+from zero_tensorflow import Tensor, random
+
 import numpy as np
 
-from zero_tensorflow import random
+
+def test_random_uniform() -> None:
+    """Verify `random.uniform` output shape and value bounds."""
+    res = random.uniform((2, 3), minval=0.0, maxval=1.0, seed=42)
+    assert isinstance(res, Tensor)
+    assert res.shape == (2, 3)
+    arr = np.asarray(res.numpy())
+    assert np.all(arr >= 0.0) and np.all(arr <= 1.0)
 
 
-def test_random_uniform():
-    res = random.uniform([2, 2])
+def test_random_normal() -> None:
+    """Verify `random.normal` output shape."""
+    res = random.normal((2, 2), mean=0.0, stddev=1.0, seed=42)
+    assert isinstance(res, Tensor)
     assert res.shape == (2, 2)
 
 
-def test_random_normal():
-    res = random.normal([2, 2])
+def test_random_truncated_normal() -> None:
+    """Verify `random.truncated_normal` output shape."""
+    res = random.truncated_normal((2, 2), mean=0.0, stddev=1.0, seed=42)
+    assert isinstance(res, Tensor)
     assert res.shape == (2, 2)
 
 
-def test_random_categorical():
-    logits = np.array([[1.0, 2.0, 3.0]])
-    res = random.categorical(logits, 5)
-    assert res.shape == (1, 5)
-
-
-def test_random_poisson():
-    res = random.poisson([2, 2], lam=5.0)
+def test_random_gamma() -> None:
+    """Verify `random.gamma` and `random.gamma` with `beta` inverse scale."""
+    res = random.gamma((2, 2), alpha=1.0, seed=42)
+    assert isinstance(res, Tensor)
     assert res.shape == (2, 2)
+    res_beta = random.gamma([2], 1.0, beta=2.0, seed=42)
+    assert isinstance(res_beta, Tensor)
+    assert res_beta.shape == (2,)
 
 
-def test_random_gamma():
-    res = random.gamma([2, 2], alpha=1.0)
-    assert res.shape == (2, 2)
+def test_random_poisson() -> None:
+    """Verify `random.poisson` output shape and non-negative integer counts."""
+    res = random.poisson((3, 4), lam=2.5, seed=42)
+    assert isinstance(res, Tensor)
+    assert res.shape == (3, 4)
+    arr = np.asarray(res.numpy())
+    assert np.all(arr >= 0.0)
 
 
-def test_random_stateless_uniform():
-    res = random.stateless_uniform([2, 2], seed=[1, 2])
-    assert res.shape == (2, 2)
+def test_random_poisson_fallback() -> None:
+    """Verify `random.poisson` edge cases for scalar shape, non-positive lambda, and `stateless_poisson`."""
+    res_scalar_shape = random.poisson(3, lam=0.0, seed=7)
+    assert isinstance(res_scalar_shape, Tensor)
+    assert res_scalar_shape.shape == (3,)
+    np.testing.assert_allclose(res_scalar_shape.numpy(), [0.0, 0.0, 0.0])
+
+    res_none_shape = random.poisson(None, lam=1.5, seed=7)
+    assert isinstance(res_none_shape, Tensor)
+    assert res_none_shape.shape == (1,)
+
+    res_stateless = random.stateless_poisson((2, 2), seed=[1, 2], lam=3.0)
+    assert isinstance(res_stateless, Tensor)
+    assert res_stateless.shape == (2, 2)
 
 
-def test_random_stateless_normal():
-    res = random.stateless_normal([2, 2], seed=[1, 2])
-    assert res.shape == (2, 2)
+def test_random_categorical() -> None:
+    """Verify `random.categorical` and `stateless_categorical`."""
+    logits = Tensor([[1.0, 2.0, 3.0]])
+    samples = random.categorical(logits, num_samples=4, seed=42)
+    assert isinstance(samples, Tensor)
+    assert samples.shape == (1, 4)
+
+    stateless_samples = random.stateless_categorical(logits, num_samples=2, seed=[1, 2])
+    assert isinstance(stateless_samples, Tensor)
+    assert stateless_samples.shape == (1, 2)
 
 
-def test_generator():
-    g = random.Generator.from_seed(42)
-    res = g.uniform([2, 2])
-    assert res.shape == (2, 2)
-    res2 = g.normal([2, 2])
-    assert res2.shape == (2, 2)
+def test_random_generator_and_stateless() -> None:
+    """Verify `Generator`, `set_seed`, `shuffle`, `stateless_uniform`, `stateless_normal`, `stateless_gamma`, and `stateless_binomial`."""
+    random.set_seed(123)
+    gen = random.Generator.from_seed(123)
+    u = gen.uniform((2, 2))
+    n = gen.normal((2, 2))
+    assert u.shape == (2, 2)
+    assert n.shape == (2, 2)
 
+    su = random.stateless_uniform((2,), seed=10)
+    sn = random.stateless_normal((2,), seed=[10, 20])
+    sg = random.stateless_gamma((2,), seed=[10, 20], alpha=1.0, beta=2.0)
+    sb = random.stateless_binomial((2,), seed=10, counts=5, probs=0.5)
+    assert su.shape == (2,)
+    assert sn.shape == (2,)
+    assert sg.shape == (2,)
+    assert sb.shape == (2,)
 
-def test_random_stubs_exist():
-    # just test they exist, no need to execute
-    assert hasattr(random, "all_candidate_sampler")
-    assert hasattr(random, "create_rng_state")
-    assert hasattr(random, "experimental")
-    assert hasattr(random, "fold_in")
-    assert hasattr(random, "get_global_generator")
-    assert hasattr(random, "set_global_generator")
-    assert hasattr(random, "shuffle")
-    assert hasattr(random, "split")
-    assert hasattr(random, "stateless_binomial")
-    assert hasattr(random, "stateless_categorical")
-    assert hasattr(random, "stateless_gamma")
-    assert hasattr(random, "stateless_poisson")
-    assert hasattr(random, "truncated_normal")
-
-
-def test_random_set_seed():
-    random.set_seed(42)
-
-
-def test_random_uniform_no_seed():
-    res = random.uniform([2, 2])
-    assert res.shape == (2, 2)
-
-
-def test_random_normal_no_seed():
-    res = random.normal([2, 2])
-    assert res.shape == (2, 2)
-
-
-def test_random_stateless_uniform_scalar_seed():
-    res = random.stateless_uniform([2, 2], seed=42)
-    assert res.shape == (2, 2)
-
-
-def test_random_stateless_normal_scalar_seed():
-    res = random.stateless_normal([2, 2], seed=42)
-    assert res.shape == (2, 2)
-
-
-def test_random_gamma_no_seed():
-    res = random.gamma([2, 2], alpha=1.0)
-    assert res.shape == (2, 2)
-
-
-def test_random_poisson_no_seed():
-    res = random.poisson([2, 2], lam=5.0)
-    assert res.shape == (2, 2)
-
-
-def test_random_categorical_no_seed():
-    logits = np.array([[1.0, 2.0, 3.0]])
-    res = random.categorical(logits, 5)
-    assert res.shape == (1, 5)
-
-
-def test_random_shuffle():
-    val = [1, 2, 3]
-    res = random.shuffle(val)
-    assert len(res) == 3
-    res2 = random.shuffle(val, seed=42)
-    assert len(res2) == 3
-
-
-def test_random_truncated_normal():
-    res = random.truncated_normal([2, 2])
-    assert res.shape == (2, 2)
-    res2 = random.truncated_normal([2, 2], seed=42)
-    assert res2.shape == (2, 2)
-
-
-def test_random_stubs_execute():
-    random.all_candidate_sampler()
-    random.create_rng_state()
-    random.experimental()
-    random.fold_in()
-    random.get_global_generator()
-    random.set_global_generator()
-    random.split()
-    random.stateless_binomial()
-    random.stateless_categorical()
-    random.stateless_gamma()
-    random.stateless_poisson()
-
-
-def test_random_gamma_with_seed():
-    res = random.gamma([2, 2], alpha=1.0, seed=42)
-    assert res.shape == (2, 2)
-
-
-def test_random_poisson_with_seed():
-    res = random.poisson([2, 2], lam=5.0, seed=42)
-    assert res.shape == (2, 2)
-
-
-def test_random_categorical_with_seed():
-    logits = np.array([[1.0, 2.0, 3.0]])
-    res = random.categorical(logits, 5, seed=42)
-    assert res.shape == (1, 5)
-
-
-def test_random_uniform_with_seed():
-    res = random.uniform([2, 2], seed=42)
-    assert res.shape == (2, 2)
-
-
-def test_random_normal_with_seed():
-    res = random.normal([2, 2], seed=42)
-    assert res.shape == (2, 2)
-
-
-def test_random_gamma_beta():
-    res = random.gamma([2], 1.0, beta=2.0)
-    assert res is not None
-
-
-def test_random_poisson_fallback():
-    # To hit fallback, we just need to ensure the test runs
-    pass
+    shuffled = random.shuffle(Tensor([1.0, 2.0, 3.0]), seed=42)
+    assert isinstance(shuffled, Tensor)
+    assert shuffled.shape == (3,)

@@ -1,11 +1,13 @@
-import importlib
+"""Unit tests for `keras.layers.Dense` integration (`test_z_br`)."""
+
+from __future__ import annotations
+
+from zero_tensorflow import keras
 
 
-def test_reimport_with_units():
-    import zero_keras as keras
-
-    if not hasattr(keras.layers.Dense, "units"):
-        keras.layers.Dense.units = property(lambda self: self._kwargs.get("units"))
-    import zero_tensorflow
-
-    importlib.reload(zero_tensorflow)
+def test_reimport_with_units() -> None:
+    """Verify `keras.layers.Dense` instantiation, building, and `units` attribute."""
+    layer = keras.layers.Dense(units=4, activation="relu")
+    layer.build((None, 2))
+    assert layer.built is True
+    assert layer.units == 4

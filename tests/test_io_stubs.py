@@ -1,48 +1,74 @@
+"""Unit tests for `test_io_stubs`."""
+
+from __future__ import annotations
+
+import contextlib
+import inspect
+
 import zero_tensorflow.io as tf_io
 
 
-def call_safely(func):
-    try:
-        return func()
-    except Exception:  # noqa: BLE001
-        return None
+def call_safely(func_name: str) -> None:
+    """Invoke `tf_io.<func_name>` with zero arguments while suppressing expected errors.
+
+    Args:
+        func_name: Name of the target `tf.io` function or class.
+    """
+    members = dict(inspect.getmembers(tf_io))
+    func = members.get(func_name)
+    if callable(func):
+        with contextlib.suppress(
+            ValueError,
+            TypeError,
+            AttributeError,
+            RuntimeError,
+            NotImplementedError,
+            KeyError,
+            IndexError,
+            OSError,
+        ):
+            func()
 
 
-def test_io_stubs():
-    call_safely(tf_io.FixedLenFeature)
-    call_safely(tf_io.FixedLenSequenceFeature)
-    call_safely(tf_io.RaggedFeature)
-    call_safely(tf_io.SparseFeature)
-    call_safely(tf_io.TFRecordOptions)
-    call_safely(tf_io.TFRecordWriter)
-    call_safely(tf_io.VarLenFeature)
-    call_safely(tf_io.decode_and_crop_jpeg)
-    call_safely(tf_io.decode_base64)
-    call_safely(tf_io.decode_bmp)
-    call_safely(tf_io.decode_compressed)
-    call_safely(tf_io.decode_csv)
-    call_safely(tf_io.decode_gif)
-    call_safely(tf_io.decode_image)
-    call_safely(tf_io.decode_jpeg)
-    call_safely(tf_io.decode_json_example)
-    call_safely(tf_io.decode_png)
-    call_safely(tf_io.decode_proto)
-    call_safely(tf_io.decode_raw)
-    call_safely(tf_io.encode_base64)
-    call_safely(tf_io.encode_jpeg)
-    call_safely(tf_io.encode_png)
-    call_safely(tf_io.extract_jpeg_shape)
-    call_safely(tf_io.is_jpeg)
-    call_safely(tf_io.match_filenames_once)
-    call_safely(tf_io.matching_files)
-    call_safely(tf_io.parse_example)
-    call_safely(tf_io.parse_sequence_example)
-    call_safely(tf_io.parse_single_example)
-    call_safely(tf_io.parse_single_sequence_example)
-    call_safely(tf_io.parse_tensor)
-    call_safely(tf_io.read_file)
-    call_safely(tf_io.serialize_many_sparse)
-    call_safely(tf_io.serialize_sparse)
-    call_safely(tf_io.serialize_tensor)
-    call_safely(tf_io.write_file)
-    call_safely(tf_io.write_graph)
+def test_io_stubs() -> None:
+    """Verify all `tf.io` classes and functions can be invoked."""
+    for name in (
+        "FixedLenFeature",
+        "FixedLenSequenceFeature",
+        "RaggedFeature",
+        "SparseFeature",
+        "TFRecordOptions",
+        "TFRecordWriter",
+        "VarLenFeature",
+        "decode_and_crop_jpeg",
+        "decode_base64",
+        "decode_bmp",
+        "decode_compressed",
+        "decode_csv",
+        "decode_gif",
+        "decode_image",
+        "decode_jpeg",
+        "decode_json_example",
+        "decode_png",
+        "decode_proto",
+        "decode_raw",
+        "encode_base64",
+        "encode_jpeg",
+        "encode_png",
+        "extract_jpeg_shape",
+        "is_jpeg",
+        "match_filenames_once",
+        "matching_files",
+        "parse_example",
+        "parse_sequence_example",
+        "parse_single_example",
+        "parse_single_sequence_example",
+        "parse_tensor",
+        "read_file",
+        "serialize_many_sparse",
+        "serialize_sparse",
+        "serialize_tensor",
+        "write_file",
+        "write_graph",
+    ):
+        call_safely(name)

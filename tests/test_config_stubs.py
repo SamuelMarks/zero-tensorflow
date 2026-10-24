@@ -1,12 +1,14 @@
+"""Unit tests for `test_config_stubs`."""
+
+from __future__ import annotations
+
 from zero_tensorflow.config import experimental, optimizer, threading
 
 
-def test_config_stubs():
-    # experimental classes
+def test_config_stubs() -> None:
+    """Execute `test_config_stubs`."""
     assert experimental.ClusterDeviceFilters() is not None
     assert experimental.VirtualDeviceConfiguration() is not None
-
-    # experimental functions
     assert experimental.disable_mlir_bridge() is None
     assert experimental.enable_mlir_bridge() is None
     assert experimental.enable_op_determinism() is None
@@ -28,14 +30,10 @@ def test_config_stubs():
     assert experimental.set_virtual_device_configuration() is None
     assert experimental.set_visible_devices() is None
     assert experimental.tensor_float_32_execution_enabled() is None
-
-    # optimizer functions
     assert optimizer.get_experimental_options() is None
     assert optimizer.get_jit() is None
     assert optimizer.set_experimental_options() is None
     assert optimizer.set_jit() is None
-
-    # threading functions
     assert threading.get_inter_op_parallelism_threads() is None
     assert threading.get_intra_op_parallelism_threads() is None
     assert threading.set_inter_op_parallelism_threads() is None

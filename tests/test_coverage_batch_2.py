@@ -1,455 +1,318 @@
-import contextlib
+"""Unit tests for `test_coverage_batch_2`."""
 
+from __future__ import annotations
 
-@contextlib.contextmanager
-def _suppress_all():
-    try:
-        yield
-    except Exception:  # noqa: BLE001, S110
-        pass
+from pathlib import Path
 
+import zero_tensorflow as tf
+from zero_tensorflow._typing import TensorOperand
 
 import numpy as np
 
-import zero_tensorflow as tf
 
+def test_distribute_stubs() -> None:
+    """Verify `tf.distribute` classes, scopes, `run`, `reduce`, and strategy state functions."""
+    assert tf.distribute.CrossDeviceOps() is not None
+    assert tf.distribute.DistributedDataset() is not None
+    assert tf.distribute.DistributedIterator() is not None
+    assert tf.distribute.DistributedValues() is not None
+    assert tf.distribute.HierarchicalCopyAllReduce() is not None
+    assert tf.distribute.InputContext() is not None
+    assert tf.distribute.InputOptions() is not None
+    assert tf.distribute.InputReplicationMode() is not None
+    assert tf.distribute.NcclAllReduce() is not None
+    assert isinstance(tf.distribute.ParameterServerStrategy(), tf.distribute.Strategy)
+    assert tf.distribute.ReductionToOneDevice() is not None
+    assert tf.distribute.ReplicaContext() is not None
+    assert tf.distribute.RunOptions() is not None
+    assert tf.distribute.Server() is not None
+    assert tf.distribute.StrategyExtended() is not None
+    assert tf.distribute.cluster_resolver.ClusterResolver() is not None
+    assert tf.distribute.cluster_resolver.GCEClusterResolver() is not None
+    assert tf.distribute.cluster_resolver.KubernetesClusterResolver() is not None
+    assert tf.distribute.cluster_resolver.SimpleClusterResolver() is not None
+    assert tf.distribute.cluster_resolver.SlurmClusterResolver() is not None
+    assert tf.distribute.cluster_resolver.TFConfigClusterResolver() is not None
+    assert tf.distribute.cluster_resolver.TPUClusterResolver() is not None
+    assert tf.distribute.cluster_resolver.UnionResolver() is not None
+    assert tf.distribute.coordinator.ClusterCoordinator() is not None
+    assert tf.distribute.coordinator.PerWorkerValue() is not None
+    assert tf.distribute.coordinator.RemoteValue() is not None
+    assert tf.distribute.coordinator.experimental_get_current_worker_index() is None
+    assert isinstance(tf.distribute.experimental.CentralStorageStrategy(), tf.distribute.Strategy)
+    assert tf.distribute.experimental.CollectiveCommunication() is not None
+    assert tf.distribute.experimental.CollectiveHints() is not None
+    assert tf.distribute.experimental.CommunicationImplementation() is not None
+    assert tf.distribute.experimental.CommunicationOptions() is not None
+    assert isinstance(
+        tf.distribute.experimental.MultiWorkerMirroredStrategy(), tf.distribute.Strategy
+    )
+    assert isinstance(tf.distribute.experimental.ParameterServerStrategy(), tf.distribute.Strategy)
+    assert tf.distribute.experimental.PreemptionCheckpointHandler() is not None
+    assert tf.distribute.experimental.PreemptionWatcher() is not None
+    assert isinstance(tf.distribute.experimental.TPUStrategy(), tf.distribute.Strategy)
+    assert tf.distribute.experimental.TerminationConfig() is not None
+    assert tf.distribute.experimental.ValueContext() is not None
+    assert tf.distribute.experimental.coordinator() is None
+    assert tf.distribute.experimental.partitioners() is None
+    assert tf.distribute.experimental.rpc() is None
 
-def test_distribute_stubs():
-    with _suppress_all():
-        tf.distribute.CrossDeviceOps()
-    with _suppress_all():
-        tf.distribute.DistributedDataset()
-    with _suppress_all():
-        tf.distribute.DistributedIterator()
-    with _suppress_all():
-        tf.distribute.DistributedValues()
-    with _suppress_all():
-        tf.distribute.HierarchicalCopyAllReduce()
-    with _suppress_all():
-        tf.distribute.InputContext()
-    with _suppress_all():
-        tf.distribute.InputOptions()
-    with _suppress_all():
-        tf.distribute.InputReplicationMode()
-    with _suppress_all():
-        tf.distribute.NcclAllReduce()
-    with _suppress_all():
-        tf.distribute.ParameterServerStrategy()
-    with _suppress_all():
-        tf.distribute.ReductionToOneDevice()
-    with _suppress_all():
-        tf.distribute.ReplicaContext()
-    with _suppress_all():
-        tf.distribute.RunOptions()
-    with _suppress_all():
-        tf.distribute.Server()
-    with _suppress_all():
-        tf.distribute.StrategyExtended()
+    tf.distribute.experimental_set_strategy(None)
+    assert tf.distribute.has_strategy() is False
+    assert isinstance(tf.distribute.get_strategy(), tf.distribute.Strategy)
+    assert tf.distribute.get_replica_context() is None
+    assert tf.distribute.in_cross_replica_context() is True
 
-    # distribute.cluster_resolver
-    with _suppress_all():
-        tf.distribute.cluster_resolver.ClusterResolver()
-    with _suppress_all():
-        tf.distribute.cluster_resolver.GCEClusterResolver()
-    with _suppress_all():
-        tf.distribute.cluster_resolver.KubernetesClusterResolver()
-    with _suppress_all():
-        tf.distribute.cluster_resolver.SimpleClusterResolver()
-    with _suppress_all():
-        tf.distribute.cluster_resolver.SlurmClusterResolver()
-    with _suppress_all():
-        tf.distribute.cluster_resolver.TFConfigClusterResolver()
-    with _suppress_all():
-        tf.distribute.cluster_resolver.TPUClusterResolver()
-    with _suppress_all():
-        tf.distribute.cluster_resolver.UnionResolver()
-
-    # distribute.coordinator
-    with _suppress_all():
-        tf.distribute.coordinator.ClusterCoordinator()
-    with _suppress_all():
-        tf.distribute.coordinator.PerWorkerValue()
-    with _suppress_all():
-        tf.distribute.coordinator.RemoteValue()
-    with _suppress_all():
-        tf.distribute.coordinator.experimental_get_current_worker_index()
-
-    # distribute.experimental
-    with _suppress_all():
-        tf.distribute.experimental.CentralStorageStrategy()
-    with _suppress_all():
-        tf.distribute.experimental.CollectiveCommunication()
-    with _suppress_all():
-        tf.distribute.experimental.CollectiveHints()
-    with _suppress_all():
-        tf.distribute.experimental.CommunicationImplementation()
-    with _suppress_all():
-        tf.distribute.experimental.CommunicationOptions()
-    with _suppress_all():
-        tf.distribute.experimental.MultiWorkerMirroredStrategy()
-    with _suppress_all():
-        tf.distribute.experimental.ParameterServerStrategy()
-    with _suppress_all():
-        tf.distribute.experimental.PreemptionCheckpointHandler()
-    with _suppress_all():
-        tf.distribute.experimental.PreemptionWatcher()
-    with _suppress_all():
-        tf.distribute.experimental.TPUStrategy()
-    with _suppress_all():
-        tf.distribute.experimental.TerminationConfig()
-    with _suppress_all():
-        tf.distribute.experimental.ValueContext()
-    with _suppress_all():
-        tf.distribute.experimental.coordinator()
-    with _suppress_all():
-        tf.distribute.experimental.partitioners()
-    with _suppress_all():
-        tf.distribute.experimental.rpc()
-
-    with _suppress_all():
-        tf.distribute.experimental_set_strategy()
-    with _suppress_all():
-        tf.distribute.get_replica_context()
-    with _suppress_all():
-        tf.distribute.get_strategy()
-    with _suppress_all():
-        tf.distribute.has_strategy()
-    with _suppress_all():
-        tf.distribute.in_cross_replica_context()
-
-    # test strategies init and minimal function
     ms = tf.distribute.MirroredStrategy()
     with ms.scope():
-        res = ms.run(lambda x: x + 1, args=(3,))
+        assert tf.distribute.has_strategy() is True
+        assert tf.distribute.get_strategy() is ms
+
+        def _plus_one(*args: TensorOperand, **kwargs: TensorOperand) -> TensorOperand:
+            """Add 1 to `x` and verify active replica context."""
+            assert tf.distribute.in_cross_replica_context() is False
+            assert isinstance(tf.distribute.get_replica_context(), tf.distribute.ReplicaContext)
+            val = args[0] if args else kwargs.get("x", 0)
+            return (int(val) if isinstance(val, int) else 0) + 1
+
+        res = ms.run(_plus_one, args=(3,))
         assert res == 4
-        res2 = ms.run(lambda x: x + 1, args=(), kwargs={"x": 3})
+        res2 = ms.run(_plus_one, args=(), kwargs={"x": 3})
         assert res2 == 4
-        res3 = ms.reduce("SUM", 5)
-        assert res3 == 5
+        assert ms.reduce("SUM", 5) == 5
+        assert ms.reduce("SUM", [2.0, 4.0]) == 6.0
+        assert ms.reduce("MEAN", [2.0, 4.0]) == 3.0
 
-    tf.distribute.MirroredStrategy(devices=["/cpu:0"])
-    tf.distribute.MultiWorkerMirroredStrategy()
-    tf.distribute.OneDeviceStrategy(device="/cpu:0")
-    tf.distribute.TPUStrategy()
+    assert tf.distribute.has_strategy() is False
+    tf.distribute.experimental_set_strategy(ms)
+    assert tf.distribute.has_strategy() is True
+    assert tf.distribute.get_strategy() is ms
+    tf.distribute.experimental_set_strategy(None)
+    assert tf.distribute.has_strategy() is False
+
+    assert tf.distribute.MirroredStrategy(devices=["/cpu:0"])._devices == ["/cpu:0"]
+    assert tf.distribute.MultiWorkerMirroredStrategy() is not None
+    assert tf.distribute.OneDeviceStrategy(device="/cpu:0")._device == "/cpu:0"
+    assert tf.distribute.TPUStrategy() is not None
 
 
-def test_io_stubs(tmp_path):
-    # write / read tests
+def test_io_stubs(tmp_path: Path) -> None:
+    """Verify `tf.io` and `tf.io.gfile` operations with concrete file and byte assertions.
+
+    Args:
+        tmp_path: Temporary directory path fixture.
+    """
     fpath = tmp_path / "test.txt"
     tf.io.write_file(str(fpath), b"hello")
     res = tf.io.read_file(str(fpath))
     assert res == b"hello"
+    tf.io.write_file(str(fpath), "world")
+    assert tf.io.read_file(str(fpath)) == b"world"
 
-    with _suppress_all():
-        tf.io.decode_jpeg(b"")
-    with _suppress_all():
-        tf.io.decode_png(b"")
-    with _suppress_all():
-        tf.io.decode_image(b"")
-    with _suppress_all():
-        tf.io.parse_tensor(b"", tf.float32)
-    with _suppress_all():
-        tf.io.serialize_tensor(tf.constant([1.0]))
-    with _suppress_all():
-        tf.io.parse_example(b"", {})
-    with _suppress_all():
-        tf.io.parse_single_example(b"", {})
+    tf.io.decode_jpeg(b"")
+    assert tf.io.FixedLenFeature() is not None
+    assert tf.io.FixedLenSequenceFeature() is not None
+    assert tf.io.RaggedFeature() is not None
+    assert tf.io.SparseFeature() is not None
+    assert tf.io.TFRecordOptions() is not None
+    assert tf.io.TFRecordWriter() is not None
+    assert tf.io.VarLenFeature() is not None
+    tf.io.decode_and_crop_jpeg()
+    assert tf.io.decode_compressed() is None
+    assert tf.io.decode_compressed(b"raw") == b"raw"
+    tf.io.decode_json_example()
+    tf.io.decode_proto()
+    assert tf.io.decode_raw() is None
+    raw_u8 = tf.io.decode_raw(b"\x01\x02", out_type="uint8")
+    assert isinstance(raw_u8, tf.Tensor)
+    np.testing.assert_array_equal(raw_u8.numpy(), [1, 2])
+    tf.io.deserialize_many_sparse()
+    tf.io.encode_jpeg()
+    tf.io.encode_png()
+    tf.io.encode_proto()
+    tf.io.extract_jpeg_shape()
 
-    with _suppress_all():
-        tf.io.FixedLenFeature()
-    with _suppress_all():
-        tf.io.FixedLenSequenceFeature()
-    with _suppress_all():
-        tf.io.RaggedFeature()
-    with _suppress_all():
-        tf.io.SparseFeature()
-    with _suppress_all():
-        tf.io.TFRecordOptions()
-    with _suppress_all():
-        tf.io.TFRecordWriter()
-    with _suppress_all():
-        tf.io.VarLenFeature()
-    with _suppress_all():
-        tf.io.decode_and_crop_jpeg()
-    with _suppress_all():
-        tf.io.decode_base64()
-    with _suppress_all():
-        tf.io.decode_bmp()
-    with _suppress_all():
-        tf.io.decode_compressed()
-    with _suppress_all():
-        tf.io.decode_csv()
-    with _suppress_all():
-        tf.io.decode_gif()
-    with _suppress_all():
-        tf.io.decode_json_example()
-    with _suppress_all():
-        tf.io.decode_proto()
-    with _suppress_all():
-        tf.io.decode_raw()
-    with _suppress_all():
-        tf.io.deserialize_many_sparse()
-    with _suppress_all():
-        tf.io.encode_base64()
-    with _suppress_all():
-        tf.io.encode_jpeg()
-    with _suppress_all():
-        tf.io.encode_png()
-    with _suppress_all():
-        tf.io.encode_proto()
-    with _suppress_all():
-        tf.io.extract_jpeg_shape()
+    assert tf.io.is_jpeg(b"\xff\xd8\xff\xe0") is True
+    assert tf.io.is_jpeg("\xff\xd8\xff") is True
+    assert tf.io.is_jpeg(b"PNG") is False
+    assert tf.io.is_jpeg(None) is False
 
-    # io.gfile
-    with _suppress_all():
-        tf.io.gfile.GFile()
-    with _suppress_all():
-        tf.io.gfile.copy()
-    with _suppress_all():
-        tf.io.gfile.exists()
-    with _suppress_all():
-        tf.io.gfile.get_registered_schemes()
-    with _suppress_all():
-        tf.io.gfile.glob()
-    with _suppress_all():
-        tf.io.gfile.isdir()
-    with _suppress_all():
-        tf.io.gfile.join()
-    with _suppress_all():
-        tf.io.gfile.listdir()
-    with _suppress_all():
-        tf.io.gfile.makedirs()
-    with _suppress_all():
-        tf.io.gfile.mkdir()
-    with _suppress_all():
-        tf.io.gfile.remove()
-    with _suppress_all():
-        tf.io.gfile.rename()
-    with _suppress_all():
-        tf.io.gfile.rmtree()
-    with _suppress_all():
-        tf.io.gfile.stat()
-    with _suppress_all():
-        tf.io.gfile.walk()
-    with _suppress_all():
-        tf.io.is_jpeg()
-    with _suppress_all():
-        tf.io.match_filenames_once()
-    with _suppress_all():
-        tf.io.matching_files()
-    with _suppress_all():
-        tf.io.parse_sequence_example()
-    with _suppress_all():
-        tf.io.parse_single_sequence_example()
-    with _suppress_all():
-        tf.io.serialize_many_sparse()
-    with _suppress_all():
-        tf.io.serialize_sparse()
-    with _suppress_all():
-        tf.io.write_graph()
+    sub_dir = tmp_path / "gfile_dir"
+    tf.io.gfile.mkdir(str(sub_dir))
+    assert tf.io.gfile.isdir(str(sub_dir)) is True
+    joined = tf.io.gfile.join(str(sub_dir), "item.txt")
+    with tf.io.gfile.GFile(joined, "w") as gf_w:
+        gf_w.write("gfile_text")
+    with tf.io.gfile.GFile(joined, "r") as gf_r:
+        assert gf_r.read() == "gfile_text"
+
+    bin_path = tf.io.gfile.join(str(sub_dir), "item.bin")
+    with tf.io.gfile.GFile(bin_path, "wb") as gf_wb:
+        gf_wb.write(b"\x00\x01")
+    with tf.io.gfile.GFile(bin_path, "rb") as gf_rb:
+        assert gf_rb.read() == b"\x00\x01"
+
+    assert tf.io.gfile.listdir(str(sub_dir)) == ["item.bin", "item.txt"]
+    walked = list(tf.io.gfile.walk(str(sub_dir)))
+    assert len(walked) == 1 and sorted(walked[0][2]) == ["item.bin", "item.txt"]
+
+    renamed_path = tf.io.gfile.join(str(sub_dir), "renamed.txt")
+    tf.io.gfile.rename(joined, renamed_path)
+    assert tf.io.gfile.exists(renamed_path) is True
+    tf.io.gfile.remove(renamed_path)
+    assert tf.io.gfile.exists(renamed_path) is False
+    tf.io.gfile.rmtree(str(sub_dir))
+    assert tf.io.gfile.isdir(str(sub_dir)) is False
+    assert tf.io.gfile.get_registered_schemes() == [""]
+
+    tf.io.match_filenames_once()
+    tf.io.matching_files()
+    tf.io.parse_sequence_example()
+    tf.io.parse_single_sequence_example()
+    tf.io.serialize_many_sparse()
+    tf.io.serialize_sparse()
+    tf.io.write_graph()
 
 
-def test_saved_model_stubs():
-    with _suppress_all():
-        tf.saved_model.save(None, "dir")
-    with _suppress_all():
-        tf.saved_model.load("dir")
+def test_saved_model_stubs(tmp_path: Path) -> None:
+    """Verify `tf.saved_model` classes and functions.
 
-    with _suppress_all():
-        tf.saved_model.Asset()
-    with _suppress_all():
-        tf.saved_model.LoadOptions()
-    with _suppress_all():
-        tf.saved_model.SaveOptions()
-    with _suppress_all():
-        tf.saved_model.contains_saved_model()
-
-    with _suppress_all():
-        tf.saved_model.experimental.Fingerprint()
-    with _suppress_all():
-        tf.saved_model.experimental.TrackableResource()
-    with _suppress_all():
-        tf.saved_model.experimental.VariablePolicy()
-    with _suppress_all():
-        tf.saved_model.experimental.read_fingerprint()
+    Args:
+        tmp_path: Temporary directory path fixture.
+    """
+    sm_dir = str(tmp_path / "sm")
+    tf.saved_model.save(lambda *args, **kwargs: None, sm_dir)
+    tf.saved_model.load(sm_dir)
+    assert tf.saved_model.Asset("vocab.txt") is not None
+    assert tf.saved_model.LoadOptions() is not None
+    assert tf.saved_model.SaveOptions() is not None
+    tf.saved_model.contains_saved_model(sm_dir)
+    assert tf.saved_model.experimental.Fingerprint() is not None
+    assert tf.saved_model.experimental.TrackableResource() is not None
+    assert tf.saved_model.experimental.VariablePolicy() is not None
+    assert tf.saved_model.experimental.read_fingerprint(sm_dir) is None
 
 
-def test_signal_stubs():
-    # fft
+def test_signal_stubs() -> None:
+    """Verify `tf.signal` FFT, windowing, and STFT operations."""
     f = tf.signal.fft([1.0, 2.0, 3.0, 4.0])
     assert len(f) == 4
     i = tf.signal.ifft(f)
     assert len(i) == 4
+    rf = tf.signal.rfft([1.0, 2.0, 3.0, 4.0], fft_length=[4])
+    assert len(rf) == 3
+    irf = tf.signal.irfft(rf, fft_length=[4])
+    assert len(irf) == 4
+    f2d = tf.signal.fft2d([[1.0, 2.0], [3.0, 4.0]])
+    assert f2d.shape == (2, 2)
+    f3d = tf.signal.fft3d([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]])
+    assert f3d.shape == (2, 2, 2)
 
-    # window
-    h = tf.signal.hann_window(10)
-    assert len(h) == 10
-    h_per = tf.signal.hann_window(10, periodic=False)
-    assert len(h_per) == 10
+    h = tf.signal.hann_window(10, periodic=True)
+    h_sym = tf.signal.hann_window(10, periodic=False)
+    assert len(h) == 10 and len(h_sym) == 10
+    assert not np.allclose(h.numpy(), h_sym.numpy())
+    assert tf.signal.hann_window(0).shape == (0,)
+    assert tf.signal.hann_window(1).numpy() == [1.0]
 
-    hm = tf.signal.hamming_window(10)
-    assert len(hm) == 10
-    hm_per = tf.signal.hamming_window(10, periodic=False)
-    assert len(hm_per) == 10
+    hm = tf.signal.hamming_window(10, periodic=True)
+    hm_sym = tf.signal.hamming_window(10, periodic=False)
+    assert len(hm) == 10 and len(hm_sym) == 10
+    assert not np.allclose(hm.numpy(), hm_sym.numpy())
+    assert tf.signal.hamming_window(0).shape == (0,)
+    assert tf.signal.hamming_window(1).numpy() == [1.0]
 
-    # stft
     s = tf.signal.stft([1.0, 2.0, 3.0, 4.0], frame_length=2, frame_step=1)
-    assert s is not None
-    s2 = tf.signal.stft(
-        [1.0, 2.0, 3.0, 4.0], frame_length=2, frame_step=1, pad_end=True
-    )
-    assert s2 is not None
-    s3 = tf.signal.stft(
-        [1.0, 2.0, 3.0, 4.0], frame_length=2, frame_step=1, fft_length=4
-    )
-    assert s3 is not None
+    assert isinstance(s, tf.Tensor)
 
 
-def test_strings_stubs():
-    j = tf.strings.join(["a", "b"])
-    assert j == "ab"
-    j_single = tf.strings.join(["a"])
-    assert j_single == "a"
-    j2 = tf.strings.join([])
-    assert j2 == ""
-
-    # regex_replace
-    r = tf.strings.regex_replace("abc", "b", "d")
-    assert r == "adc"
-    r2 = tf.strings.regex_replace("abc", "b", "d", replace_global=False)
-    assert r2 == "adc"
-
-    # split
-    s = tf.strings.split("a b c", " ")
-    assert list(s) == ["a", "b", "c"]
-    s2 = tf.strings.split(["a b", "c d"], " ")
-    assert len(s2) == 2
-
-    # bytes_split
-    b = tf.strings.bytes_split("abc")
-    assert list(b) == ["a", "b", "c"]
-    b2 = tf.strings.bytes_split(["ab", "cd"])
-    assert len(b2) == 2
+def test_strings_stubs() -> None:
+    """Verify `tf.strings` operations including ngrams, unicode, length units, and numeric parsing."""
+    assert tf.strings.join(["a", "b"]) == "ab"
+    assert tf.strings.join(["a"]) == "a"
+    assert tf.strings.join([]) == ""
+    assert tf.strings.regex_replace("abc", "b", "d") == "adc"
+    assert tf.strings.regex_replace("abc", "b", "d", replace_global=False) == "adc"
+    assert tf.strings.split("a b c", " ") == ["a", "b", "c"]
+    assert tf.strings.split(["a b", "c d"], " ") == [["a", "b"], ["c", "d"]]
+    assert tf.strings.bytes_split("abc") == ["a", "b", "c"]
+    assert tf.strings.bytes_split(["ab", "cd"]) == [["a", "b"], ["c", "d"]]
 
     class MockTensor:
-        def numpy(self):
+        """Test helper implementing `NumpyConvertibleProtocol`."""
+
+        def numpy(self) -> TensorOperand:
+            """Return a 0-D NumPy string array."""
             return np.array("a")
 
-    tf.strings.length(MockTensor())
-
-    # strip, lower, upper, substr, length
+    assert tf.strings.length(MockTensor()) == 1
+    assert tf.strings.length("é", unit="BYTE") == 2
+    assert tf.strings.length("é", unit="UTF8_CHAR") == 1
     assert tf.strings.strip(" a") == "a"
     assert tf.strings.lower("A") == "a"
     assert tf.strings.upper("a") == "A"
     assert tf.strings.substr("abc", 1, 1) == "b"
-    assert tf.strings.length("abc") == 3
-
-    # regex_full_match
-    assert tf.strings.regex_full_match("abc", ".*b.*")
-
-    # to_number
-    n = tf.strings.to_number("1.2")
-    assert np.isclose(n, 1.2)
-
-    # format
-    f = tf.strings.format("{} {}", ["a", "b"])
-    assert f == "a b"
-
-    # reduce_join
-    rj = tf.strings.reduce_join(["a", "b"], separator="-")
-    assert rj == "a-b"
-
-    # to_hash_bucket
+    assert tf.strings.regex_full_match("abc", ".*b.*") is True
+    n_float = tf.strings.to_number("1.2")
+    assert isinstance(n_float, float) and np.isclose(n_float, 1.2)
+    n_int = tf.strings.to_number("42", out_type=tf.int32)
+    assert n_int == 42
+    assert tf.strings.format("{} {}", ["a", "b"]) == "a b"
+    assert tf.strings.reduce_join(["a", "b"], separator="-") == "a-b"
     hb = tf.strings.to_hash_bucket("a", 10)
-    assert 0 <= hb < 10
-    hb_f = tf.strings.to_hash_bucket_fast("a", 10)
-    assert 0 <= hb_f < 10
-    hb_s = tf.strings.to_hash_bucket_strong("a", 10, [1, 2])
-    assert 0 <= hb_s < 10
+    assert isinstance(hb, int) and 0 <= hb < 10
+    assert tf.strings.to_hash_bucket_fast("a", 10) == hb
+    assert tf.strings.to_hash_bucket_strong("a", 10, [1, 2]) == hb
 
-    # unicode functions empty stubs
-    assert len(tf.strings.ngrams([], 1)) == 0
-    assert len(tf.strings.unicode_decode([], "utf-8")) == 0
-    res1, res2 = tf.strings.unicode_decode_with_offsets([], "utf-8")
-    assert len(res1) == 0 and len(res2) == 0
-    assert len(tf.strings.unicode_encode([], "utf-8")) == 0
-    assert len(tf.strings.unicode_script([])) == 0
-    assert len(tf.strings.unicode_split([], "utf-8")) == 0
-    res3, res4 = tf.strings.unicode_split_with_offsets([], "utf-8")
-    assert len(res3) == 0 and len(res4) == 0
-    assert len(tf.strings.unicode_transcode([], "utf-8", "utf-8")) == 0
-    assert len(tf.strings.unsorted_segment_join([], [], 1)) == 0
+    assert tf.strings.ngrams(["a", "b", "c"], 2) == ["a b", "b c"]
+    assert tf.strings.ngrams(["a"], 2, preserve_short_sequences=True) == ["a"]
+    assert tf.strings.ngrams(["a", "b"], 2, pad_values=("L", "R")) == ["L a", "a b", "b R"]
+    assert tf.strings.ngrams([], 2) == []
+
+    assert tf.strings.unicode_decode("ab", "utf-8") == [97, 98]
+    codes, offsets = tf.strings.unicode_decode_with_offsets("ab", "utf-8")
+    assert codes == [97, 98] and offsets == [0, 1]
+    assert tf.strings.unicode_encode([97, 98], "utf-8") == ["ab"]
+    assert tf.strings.unicode_script([97, 98]) == [0, 0]
+    assert tf.strings.unicode_split("ab", "utf-8") == ["a", "b"]
+    chars, char_offsets = tf.strings.unicode_split_with_offsets("ab", "utf-8")
+    assert chars == ["a", "b"] and char_offsets == [0, 1]
+    assert tf.strings.unicode_transcode("hello", "utf-8", "utf-8") == ["hello"]
+    assert tf.strings.unsorted_segment_join(["a", "b", "c"], [0, 1, 0], 2, separator="-") == [
+        "a-c",
+        "b",
+    ]
 
 
-def test_train_stubs():
-    ckpt = tf.train.Checkpoint()
-    with _suppress_all():
-        ckpt.save("test")
-    with _suppress_all():
-        ckpt.restore("test")
+def test_train_stubs() -> None:
+    """Verify `tf.train` checkpoint saving, `CheckpointManager`, `ExponentialMovingAverage`, and inspection functions."""
+    v = tf.Variable(10.0)
+    ckpt = tf.train.Checkpoint(var=v)
+    saved_prefix = ckpt.save("dir/my_ckpt")
+    assert saved_prefix == "dir/my_ckpt"
+    v.assign(99.0)
+    status = ckpt.restore("dir/my_ckpt")
+    assert status is not None
+    assert v.numpy() == 10.0
 
-    manager = tf.train.CheckpointManager(ckpt, "dir", 5)
-    with _suppress_all():
-        manager.save()
-    assert manager.latest_checkpoint is None
-    assert manager.checkpoints == []
+    manager = tf.train.CheckpointManager(ckpt, "mgr_dir", max_to_keep=2)
+    p1 = manager.save()
+    p2 = manager.save()
+    p3 = manager.save()
+    assert p1 == "mgr_dir/ckpt-1"
+    assert p2 == "mgr_dir/ckpt-2"
+    assert p3 == "mgr_dir/ckpt-3"
+    assert manager.latest_checkpoint == "mgr_dir/ckpt-3"
+    assert manager.checkpoints == ["mgr_dir/ckpt-2", "mgr_dir/ckpt-3"]
+    assert tf.train.latest_checkpoint("mgr_dir") == "mgr_dir/ckpt-3"
+    assert tf.train.list_variables("mgr_dir") == [("var", [])]
+    assert tf.train.load_variable("mgr_dir", "var") == 10.0
+    assert tf.train.load_checkpoint("mgr_dir") == {"var": 10.0}
 
-    with _suppress_all():
-        tf.train.BytesList()
-    with _suppress_all():
-        tf.train.CheckpointOptions()
-    with _suppress_all():
-        tf.train.CheckpointView()
-    with _suppress_all():
-        tf.train.ClusterDef()
-    with _suppress_all():
-        tf.train.ClusterSpec()
-    with _suppress_all():
-        tf.train.Coordinator()
-    with _suppress_all():
-        tf.train.Example()
-    with _suppress_all():
-        tf.train.ExponentialMovingAverage()
-    with _suppress_all():
-        tf.train.Feature()
-    with _suppress_all():
-        tf.train.FeatureList()
-    with _suppress_all():
-        tf.train.FeatureLists()
-    with _suppress_all():
-        tf.train.Features()
-    with _suppress_all():
-        tf.train.FloatList()
-    with _suppress_all():
-        tf.train.Int64List()
-    with _suppress_all():
-        tf.train.JobDef()
-    with _suppress_all():
-        tf.train.SequenceExample()
-    with _suppress_all():
-        tf.train.ServerDef()
-    with _suppress_all():
-        tf.train.TrackableView()
-    with _suppress_all():
-        tf.train.checkpoints_iterator()
-    with _suppress_all():
-        tf.train.get_checkpoint_state()
-    with _suppress_all():
-        tf.train.latest_checkpoint()
-    with _suppress_all():
-        tf.train.list_variables()
-    with _suppress_all():
-        tf.train.load_checkpoint()
-    with _suppress_all():
-        tf.train.load_variable()
-
-    with _suppress_all():
-        tf.train.experimental.MaxShardSizePolicy()
-    with _suppress_all():
-        tf.train.experimental.PythonState()
-    with _suppress_all():
-        tf.train.experimental.ShardByTaskPolicy()
-    with _suppress_all():
-        tf.train.experimental.ShardableTensor()
-    with _suppress_all():
-        tf.train.experimental.ShardingCallback()
+    ema = tf.train.ExponentialMovingAverage(decay=0.5, num_updates=10)
+    ema.apply([v])
+    assert ema.average(v) == 10.0
+    v.assign(20.0)
+    ema.apply([v])
+    assert ema.average(v) == 15.0
+    assert ema.average_name(v) == "Variable/ExponentialMovingAverage"

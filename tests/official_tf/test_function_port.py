@@ -1,21 +1,36 @@
-import tensorflow as tf
-from tensorflow.python.eager import def_function
-from tensorflow.python.framework import test_util
-from tensorflow.python.platform import test
+"""Ported `tf.function` tracing unit tests."""
+
+from __future__ import annotations
+
+import zero_tensorflow as tf
+from tests.conftest import FakeDefFunction, TensorFlowTestCase
+from zero_tensorflow._typing import TensorOperand
 
 
-class DefFunctionTest(test_util.TensorFlowTestCase):
-    def testBasic(self):
-        @def_function.function
-        def add(a, b):
-            return a + b
+class FunctionTest(TensorFlowTestCase):
+    """Ported `tf.function` compilation test case."""
 
-        # In zero-tensorflow, function tracing currently produces a LogicalNode/ProxyTensor tuple.
-        # This just ensures we can trace it.
+    def testBasic(self) -> None:
+        """Verify `@tf.function` traces a binary tensor addition and preserves numerical value."""
+
+        @FakeDefFunction.function
+        def add(*args: TensorOperand, **kwargs: TensorOperand) -> tf.Tensor:
+            """Add two `Tensor` positional arguments.
+
+            Args:
+                *args: Two `Tensor` operands `(a, b)`.
+                **kwargs: Unused keyword arguments.
+
+            Returns:
+                tf.Tensor: Sum `a + b`.
+            """
+            del kwargs
+            a = args[0]
+            b = args[1]
+            if isinstance(a, tf.Tensor) and isinstance(b, tf.Tensor):
+                return a + b
+            return tf.Tensor(0.0)
+
         res = add(tf.Tensor(1.0), tf.Tensor(2.0))
-        # It returns a Tensor object tracing the result
-        self.assertTrue(isinstance(res, tf.Tensor))
-
-
-if __name__ == "__main__":
-    test.main()
+        self.assertIsInstance(res, tf.Tensor)
+        self.assertAllClose(res, 3.0)

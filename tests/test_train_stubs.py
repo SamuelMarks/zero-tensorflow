@@ -1,11 +1,26 @@
+"""Unit tests for `test_train_stubs`."""
+
+from __future__ import annotations
+
+import inspect
+
 import zero_tensorflow.train as tf_train
+from zero_tensorflow._typing import CallableOperandProtocol, TensorOperand
 
 
-def call_safely(callable_obj):
-    import inspect
+def call_safely(callable_obj: CallableOperandProtocol | TensorOperand | type) -> TensorOperand:
+    """Invoke `callable_obj` supplying `None` for any required parameters.
 
+    Args:
+        callable_obj: Target class or function.
+
+    Returns:
+        TensorOperand: Result of calling `callable_obj` or `'fallback'`.
+    """
+    if not callable(callable_obj):
+        return None
     sig = inspect.signature(callable_obj)
-    kwargs = {}
+    kwargs: dict[str, None] = {}
     for name, param in sig.parameters.items():
         if param.default is inspect.Parameter.empty and param.kind not in (
             inspect.Parameter.VAR_POSITIONAL,
@@ -13,13 +28,22 @@ def call_safely(callable_obj):
         ):
             kwargs[name] = None
     try:
-        return callable_obj(**kwargs)
-    except Exception:  # noqa: BLE001
+        res: TensorOperand = callable_obj(**kwargs)
+        return res
+    except (
+        ValueError,
+        TypeError,
+        AttributeError,
+        RuntimeError,
+        NotImplementedError,
+        KeyError,
+        IndexError,
+    ):
         return "fallback"
-    return None
 
 
-def test_train_stubs():
+def test_train_stubs() -> None:
+    """Verify `tf.train` protocol buffer and checkpoint stub classes and functions."""
     assert call_safely(tf_train.BytesList) is not None
     assert call_safely(tf_train.Checkpoint) is not None
     assert call_safely(tf_train.CheckpointManager) is not None
@@ -40,13 +64,13 @@ def test_train_stubs():
     assert call_safely(tf_train.SequenceExample) is not None
     assert call_safely(tf_train.ServerDef) is not None
     assert call_safely(tf_train.TrackableView) is not None
-    assert call_safely(tf_train.checkpoints_iterator) in (None, "fallback")
+    assert call_safely(tf_train.checkpoints_iterator) is None
     assert call_safely(tf_train.experimental) is not None
-    assert call_safely(tf_train.get_checkpoint_state) in (None, "fallback")
-    assert call_safely(tf_train.latest_checkpoint) in (None, "fallback")
-    assert call_safely(tf_train.list_variables) in (None, "fallback")
-    assert call_safely(tf_train.load_checkpoint) in (None, "fallback")
-    assert call_safely(tf_train.load_variable) in (None, "fallback")
+    assert call_safely(tf_train.get_checkpoint_state) is None
+    assert tf_train.latest_checkpoint(None) is None
+    assert call_safely(tf_train.list_variables) == []
+    assert call_safely(tf_train.load_checkpoint) is None
+    assert call_safely(tf_train.load_variable) is None
     assert call_safely(tf_train.experimental.MaxShardSizePolicy) is not None
     assert call_safely(tf_train.experimental.PythonState) is not None
     assert call_safely(tf_train.experimental.ShardByTaskPolicy) is not None
