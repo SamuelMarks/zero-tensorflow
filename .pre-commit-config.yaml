@@ -31,7 +31,14 @@ repos:
 
       - id: pytest-cov
         name: Pytest Coverage
-        entry: pytest --cov=src/zero_tensorflow --cov=scripts --cov-branch --cov-fail-under=100 -m "not reference"
+        entry: pytest --cov=src/zero_tensorflow --cov=scripts --cov-branch --cov-report=json --cov-fail-under=100 -m "not reference"
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: pytest-reference
+        name: Pytest Reference Parity
+        entry: pytest -m "reference"
         language: system
         types: [python]
         pass_filenames: false

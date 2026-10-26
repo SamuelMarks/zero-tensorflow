@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from tests.conftest import TensorFlowTestCase
-from zero_tensorflow import keras
-
-import numpy as np
+from zero_tensorflow import Tensor, keras
 
 
 class DenseTest(TensorFlowTestCase):
@@ -21,15 +19,16 @@ class DenseTest(TensorFlowTestCase):
         layer.build((1, 2))
         layer.set_weights(
             [
-                np.array([[1.0, 2.0], [3.0, 4.0]]),
-                np.array([0.5, -0.5]),
+                Tensor([[1.0, 2.0], [3.0, 4.0]]).numpy(),
+                Tensor([0.5, -0.5]).numpy(),
             ]
         )
-        inputs = np.array([[1.0, 1.0]])
-        expected_output = np.array([[4.5, 5.5]])
+        inputs = Tensor([[1.0, 1.0]]).numpy()
+        expected_output = [[4.5, 5.5]]
 
         outputs = layer(inputs)
         self.assertAllClose(outputs, expected_output)
+        self.assertDifferentialParity(lambda _backend: layer(inputs))
 
     def test_dense_api_signature(self) -> None:
         """Verify `Dense` build state and `units` property."""

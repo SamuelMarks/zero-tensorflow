@@ -1,4 +1,4 @@
-"""Generate `snapshots/tf_api.json` from official TensorFlow or `ml-ecosystem-snapshots`."""
+"""Generate `snapshots/tf_api.json` from `ml-ecosystem-snapshots`."""
 
 from __future__ import annotations
 
@@ -34,10 +34,10 @@ def get_public_api(
     prefix: str = "tf",
     depth: int = 0,
 ) -> dict[str, ApiTree]:
-    """Recursively introspect a live TensorFlow module into a nested API dictionary.
+    """Recursively introspect a module into a nested API dictionary.
 
     Args:
-        module: Live module to introspect.
+        module: Module to introspect.
         prefix: Current dotted API path prefix.
         depth: Current recursion depth (capped at `2`).
 
@@ -52,7 +52,7 @@ def get_public_api(
             continue
         if inspect.ismodule(obj):
             mod_name = safe_name(obj)
-            if mod_name.startswith("tensorflow") or mod_name.startswith("keras"):
+            if mod_name.startswith("zero_tensorflow") or mod_name.startswith("zero_keras"):
                 api[name] = {
                     "type": "module",
                     "contents": get_public_api(obj, f"{prefix}.{name}", depth + 1),
@@ -69,7 +69,7 @@ def get_public_api(
 def build_api_from_ecosystem_snapshot(
     snapshot_file: str,
 ) -> dict[str, ApiTree]:
-    """Build a nested `tf_api.json` tree from an `ml-ecosystem-snapshots` v0.0.4 file.
+    """Build a nested `tf_api.json` tree from an `ml-ecosystem-snapshots` v0.0.5 file.
 
     Args:
         snapshot_file: Path to `tensorflow_v*.json` from `ml-ecosystem-snapshots`.
@@ -117,25 +117,16 @@ def generate_snapshot(
     Returns:
         dict[str, ApiTree]: Generated API dictionary.
     """
-    default_eco = ecosystem_snapshot_path or os.path.expanduser(
-        "~/.cache/ml_ecosystem_snapshots/tensorflow_v2.21.0.json"
-    )
-    if ecosystem_snapshot_path is not None and os.path.exists(ecosystem_snapshot_path):
-        api = build_api_from_ecosystem_snapshot(ecosystem_snapshot_path)
-    else:
-        try:
-            import importlib
+    from ml_ecosystem_snapshots.cli.resolver import resolve_snapshot_path
 
-            tf_mod = importlib.import_module("tensorflow")
-            if not tf_mod.__name__.startswith("tensorflow"):
-                raise TypeError("Invalid tensorflow module")
-            api = get_public_api(tf_mod)
-        except (ImportError, TypeError):
-            api = (
-                build_api_from_ecosystem_snapshot(default_eco)
-                if os.path.exists(default_eco)
-                else {}
-            )
+    default_cache = os.path.expanduser("~/.cache/ml_ecosystem_snapshots/tensorflow_v2.21.0.json")
+    resolved_default = (
+        default_cache
+        if os.path.exists(default_cache)
+        else resolve_snapshot_path("tensorflow_v2.21.0.json", must_exist=False)
+    )
+    target_eco = ecosystem_snapshot_path or resolved_default
+    api = build_api_from_ecosystem_snapshot(target_eco) if os.path.exists(target_eco) else {}
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:

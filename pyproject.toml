@@ -9,22 +9,18 @@ description = "Zero-dependency pure Python implementation of the TensorFlow API 
 authors = [{ name = "Samuel Marks" }]
 license = { text = "Apache-2.0 OR MIT" }
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dynamic = ["dependencies"]
 
 [project.optional-dependencies]
 test = [
     "pytest",
     "pytest-cov",
-    "absl-py",
-    "parameterized",
-    "mock",
     "pytest-json-report",
-    "numpy",
     "mypy>=1.10.0",
     "interrogate>=1.7.0",
     "ruff>=0.4.4",
-    "ml-ecosystem-snapshots @ https://github.com/SamuelMarks/ml-ecosystem-snapshots/releases/download/v0.0.4/ml_ecosystem_snapshots-0.0.4-py3-none-any.whl",
+    "ml-ecosystem-snapshots @ https://github.com/SamuelMarks/ml-ecosystem-snapshots/releases/download/v0.0.5/ml_ecosystem_snapshots-0.0.5-py3-none-any.whl",
 ]
 
 [tool.hatch.metadata.hooks.requirements_txt]
@@ -82,6 +78,9 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "ANN", "D"]
 ignore = ["E501", "UP007", "UP045"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/zero_tensorflow/raw_ops.py" = ["E741"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["zero_tensorflow"]

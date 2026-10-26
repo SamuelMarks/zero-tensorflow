@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import zero_tensorflow as tf
-from zero_tensorflow import GradientTape, Tensor, Variable, data, function, math
+import math as py_math
 
-import numpy as np
+import zero_tensorflow as tf
+from zero_tensorflow import GradientTape, Tensor, Variable, data, debugging, function, math
 
 
 def test_variable() -> None:
@@ -76,23 +76,23 @@ def test_math() -> None:
     assert math.subtract(2, 1).numpy() == 1
     assert math.multiply(2, 3).numpy() == 6
     assert math.divide(6, 2).numpy() == 3.0
-    exp_val = math.exp(0).numpy()
-    log_val = math.log(np.e).numpy()
-    assert isinstance(exp_val, (float, np.ndarray)) and np.allclose(exp_val, 1.0)
-    assert isinstance(log_val, (float, np.ndarray)) and np.allclose(log_val, 1.0)
+    exp_val = math.exp(0)
+    log_val = math.log(py_math.e)
+    debugging.assert_near(exp_val, 1.0)
+    debugging.assert_near(log_val, 1.0)
     assert math.pow(2, 3).numpy() == 8
     assert math.sqrt(4).numpy() == 2
-    x = np.array([[1, 2], [3, 4]])
+    x = [[1, 2], [3, 4]]
     assert math.reduce_sum(x).numpy() == 10
     assert math.reduce_mean(x).numpy() == 2.5
     assert math.reduce_max(x).numpy() == 4
     assert math.reduce_min(x).numpy() == 1
-    a = np.array([[1, 0], [0, 1]])
-    b = np.array([[1, 2], [3, 4]])
-    mm_val = tf.linalg.matmul(a, b).numpy()
-    td_val = tf.linalg.tensordot(a, b, axes=1).numpy()
-    np.testing.assert_array_equal(mm_val, b)
-    np.testing.assert_array_equal(td_val, b)
+    a = [[1, 0], [0, 1]]
+    b = [[1, 2], [3, 4]]
+    mm_val = tf.linalg.matmul(a, b)
+    td_val = tf.linalg.tensordot(a, b, axes=1)
+    debugging.assert_equal(mm_val, b)
+    debugging.assert_equal(td_val, b)
 
 
 def test_tensor_magic_methods_eager() -> None:
@@ -200,7 +200,7 @@ def test_math_traced() -> None:
 
     x = Tensor(2.0)
     y = Tensor(3.0)
-    a = Tensor(np.eye(2))
-    b = Tensor(np.eye(2))
+    a = tf.eye(2)
+    b = tf.eye(2)
     res = math_f(x, y, a, b)
     assert all(isinstance(r, Tensor) for r in res)

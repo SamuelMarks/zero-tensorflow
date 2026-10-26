@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from zero_tensorflow import Tensor as ZTensor
 
-import numpy as np
 from ml_switcheroo_compiler.core import config
 from ml_switcheroo_compiler.core.tensor import Tensor, as_tensor_obj
 from ml_switcheroo_compiler.ops import control_flow
@@ -13,7 +12,7 @@ from ml_switcheroo_compiler.ops import control_flow
 def test_control_flow_eager() -> None:
     """Verify eager execution of `cond`, `while_loop`, `scan`, `vmap`, `pmap`, and `stop_gradient`."""
     config.eager_mode = True
-    x = as_tensor_obj(ZTensor(np.array([[1.0, 2.0], [3.0, 4.0]]))._tensor)
+    x = as_tensor_obj(ZTensor([[1.0, 2.0], [3.0, 4.0]])._tensor)
 
     def true_fn() -> Tensor:
         """Return `x` for the true branch.
@@ -77,7 +76,7 @@ def test_control_flow_eager() -> None:
         del xs
         return (c, 1.0)
 
-    empty_x = as_tensor_obj(ZTensor(np.array([]))._tensor)
+    empty_x = as_tensor_obj(ZTensor([])._tensor)
     control_flow.scan(scan_fn_empty, x, empty_x)
 
     def vmap_fn(val: Tensor) -> Tensor:

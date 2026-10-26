@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import zero_tensorflow as tf
-from tests.conftest import FakeDefFunction, TensorFlowTestCase
+from tests.conftest import TensorFlowTestCase
 from zero_tensorflow._typing import TensorOperand
 
 
@@ -13,7 +13,7 @@ class FunctionTest(TensorFlowTestCase):
     def testBasic(self) -> None:
         """Verify `@tf.function` traces a binary tensor addition and preserves numerical value."""
 
-        @FakeDefFunction.function
+        @tf.function
         def add(*args: TensorOperand, **kwargs: TensorOperand) -> tf.Tensor:
             """Add two `Tensor` positional arguments.
 

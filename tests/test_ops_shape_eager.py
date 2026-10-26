@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import zero_tensorflow as tf
 
-import numpy as np
-
 
 def test_shape_eager() -> None:
     """Verify eager shape, reshape, expand_dims, squeeze, transpose, concat, stack, unstack, split, tile, broadcast_to, slice, and strided_slice operations."""
@@ -17,7 +15,7 @@ def test_shape_eager() -> None:
     reshaped = tf.reshape(x, (3, 2))
     assert isinstance(reshaped, tf.Tensor)
     assert reshaped.shape == (3, 2)
-    np.testing.assert_allclose(reshaped.numpy(), [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    tf.debugging.assert_near(reshaped, [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
 
     expanded = tf.expand_dims(x, axis=0)
     assert isinstance(expanded, tf.Tensor)
@@ -26,12 +24,12 @@ def test_shape_eager() -> None:
     squeezed = tf.squeeze(expanded, axis=0)
     assert isinstance(squeezed, tf.Tensor)
     assert squeezed.shape == (2, 3)
-    np.testing.assert_allclose(squeezed.numpy(), x.numpy())
+    tf.debugging.assert_near(squeezed, x)
 
     transposed = tf.transpose(x)
     assert isinstance(transposed, tf.Tensor)
     assert transposed.shape == (3, 2)
-    np.testing.assert_allclose(transposed.numpy(), [[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]])
+    tf.debugging.assert_near(transposed, [[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]])
 
     concatenated = tf.concat([x, x], axis=0)
     assert isinstance(concatenated, tf.Tensor)
@@ -44,7 +42,7 @@ def test_shape_eager() -> None:
     unstacked = tf.unstack(stacked, axis=0)
     assert isinstance(unstacked, (list, tuple))
     assert len(unstacked) == 2
-    np.testing.assert_allclose(unstacked[0].numpy(), x.numpy())
+    tf.debugging.assert_near(unstacked[0], x)
 
     splits = tf.split(x, 3, axis=1)
     assert isinstance(splits, (list, tuple))
@@ -58,14 +56,14 @@ def test_shape_eager() -> None:
     broadcasted = tf.broadcast_to(tf.Tensor([1.0, 2.0, 3.0]), (2, 3))
     assert isinstance(broadcasted, tf.Tensor)
     assert broadcasted.shape == (2, 3)
-    np.testing.assert_allclose(broadcasted.numpy(), [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]])
+    tf.debugging.assert_near(broadcasted, [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]])
 
     sliced = tf.slice(x, [0, 1], [2, 2])
     assert isinstance(sliced, tf.Tensor)
     assert sliced.shape == (2, 2)
-    np.testing.assert_allclose(sliced.numpy(), [[2.0, 3.0], [5.0, 6.0]])
+    tf.debugging.assert_near(sliced, [[2.0, 3.0], [5.0, 6.0]])
 
     strided = tf.strided_slice(x, [0, 0], [2, 3], [1, 2])
     assert isinstance(strided, tf.Tensor)
     assert strided.shape == (2, 2)
-    np.testing.assert_allclose(strided.numpy(), [[1.0, 3.0], [4.0, 6.0]])
+    tf.debugging.assert_near(strided, [[1.0, 3.0], [4.0, 6.0]])

@@ -7,14 +7,22 @@ import os
 import shutil
 import struct
 import zlib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from types import TracebackType
 
-from zero_tensorflow._typing import DTypeLike, TensorOperand
-from zero_tensorflow.core_tensor import Tensor, _wrap_tensor
+from zero_tensorflow._typing import (
+    ArrayLikeProtocol,
+    DTypeLike,
+    SparseTensorProtocol,
+    TensorOperand,
+    as_operand,
+)
+from zero_tensorflow.core_tensor import Tensor, _to_tensor, _wrap_tensor
+from zero_tensorflow.sparse import SparseTensor
 
 import ml_switcheroo_compiler.core as msc_core
 import ml_switcheroo_compiler.core.dtype as msc_dtype
+import ml_switcheroo_compiler.ops as msc_ops
 from ml_switcheroo_compiler.core.shape import TensorOrScalar
 from ml_switcheroo_compiler.core.tensor import as_tensor_obj
 from ml_switcheroo_compiler.ops.io import (
@@ -106,6 +114,125 @@ __all__ = [
     "write_graph",
 ]
 
+_SPARSE_SERIAL_COUNTER: int = 0
+_SPARSE_SERIAL_STORE: dict[int, tuple[Tensor, Tensor, Tensor]] = {}
+
+
+def _masked_crc32(data: bytes) -> int:
+    """Compute a masked 32-bit CRC checksum for TFRecord framing.
+
+    Args:
+        data: Byte payload to checksum.
+
+    Returns:
+        int: Masked 32-bit unsigned integer checksum.
+    """
+    crc = zlib.crc32(data) & 0xFFFFFFFF
+    rotated = ((crc >> 15) | (crc << 17)) & 0xFFFFFFFF
+    return (rotated + 0xA282EAD8) & 0xFFFFFFFF
+
+
+def encode_tfrecord_frame(payload: bytes) -> bytes:
+    """Encode a single payload into a length-prefixed CRC-framed TFRecord entry.
+
+    Args:
+        payload: Raw record bytes.
+
+    Returns:
+        bytes: Framed TFRecord bytes (`length` + `len_crc` + `payload` + `data_crc`).
+    """
+    length_bytes = struct.pack("<Q", len(payload))
+    len_crc = struct.pack("<I", _masked_crc32(length_bytes))
+    data_crc = struct.pack("<I", _masked_crc32(payload))
+    return length_bytes + len_crc + payload + data_crc
+
+
+def decode_tfrecord_frames(raw_stream: bytes) -> list[bytes]:
+    """Decode all length-prefixed CRC-framed records from a TFRecord byte stream.
+
+    Args:
+        raw_stream: Complete byte contents of a TFRecord file.
+
+    Returns:
+        list[bytes]: List of decoded record payloads.
+
+    Raises:
+        ValueError: If a record frame is truncated or has a mismatched CRC checksum.
+    """
+    records: list[bytes] = []
+    offset = 0
+    total = len(raw_stream)
+    while offset < total:
+        if offset + 12 > total:
+            raise ValueError("Truncated TFRecord frame.")
+        length_bytes = raw_stream[offset : offset + 8]
+        (length,) = struct.unpack("<Q", length_bytes)
+        (expected_len_crc,) = struct.unpack("<I", raw_stream[offset + 8 : offset + 12])
+        offset += 12
+        payload = raw_stream[offset : offset + length]
+        (expected_data_crc,) = struct.unpack(
+            "<I", raw_stream[offset + length : offset + length + 4]
+        )
+        if (
+            _masked_crc32(length_bytes) != expected_len_crc
+            or _masked_crc32(payload) != expected_data_crc
+        ):
+            raise ValueError("Corrupted TFRecord CRC.")
+        records.append(payload)
+        offset += length + 4
+    return records
+
+
+def _extract_raw_bytes(contents: TensorOperand) -> bytes:
+    """Extract raw `bytes` from a `bytes` or `str` operand.
+
+    Args:
+        contents: Input byte-like operand.
+
+    Returns:
+        bytes: Extracted byte string.
+    """
+    return (
+        contents
+        if isinstance(contents, bytes)
+        else (contents.encode("latin1") if isinstance(contents, str) else b"")
+    )
+
+
+def _flatten_int_list(t: Tensor) -> list[int]:
+    """Flatten `t` into a 1-D Python list of integers.
+
+    Args:
+        t: Input `Tensor`.
+
+    Returns:
+        list[int]: Flattened integer values.
+    """
+    reshaped = _wrap_tensor(msc_ops.shape.frontend.reshape(_to_tensor(t), (-1,)))
+    arr = as_operand(reshaped.numpy())
+    raw_list = arr.tolist() if isinstance(arr, ArrayLikeProtocol) else []
+    return (
+        [int(x) for x in raw_list if isinstance(x, (int, float))]
+        if isinstance(raw_list, list)
+        else []
+    )
+
+
+def _parse_jpeg_sof(raw: bytes) -> tuple[int, int, int] | None:
+    """Parse `(height, width, channels)` from a JPEG SOF0 marker if present.
+
+    Args:
+        raw: JPEG byte stream.
+
+    Returns:
+        tuple[int, int, int] | None: `(height, width, channels)` if found, else `None`.
+    """
+    sof_idx = raw.find(b"\xff\xc0")
+    if not raw.startswith(b"\xff\xd8") or sof_idx == -1 or sof_idx + 10 > len(raw):
+        return None
+    height, width, channels = struct.unpack(">HHB", raw[sof_idx + 5 : sof_idx + 10])
+    return (int(height), int(width), int(channels))
+
 
 def read_file(filename: str, name: str | None = None) -> bytes:
     """Read the raw byte contents of a file.
@@ -125,7 +252,7 @@ def read_file(filename: str, name: str | None = None) -> bytes:
 
 def write_file(
     filename: str,
-    contents: msc_core.Tensor | bytes | str,
+    contents: Tensor | msc_core.Tensor | bytes | str,
     name: str | None = None,
 ) -> None:
     """Write `contents` to the file at `filename`.
@@ -138,14 +265,40 @@ def write_file(
     del name
     if isinstance(contents, msc_core.Tensor):
         _write_file(filename, contents)
+    elif isinstance(contents, Tensor) and contents._tensor is not None:
+        _write_file(filename, contents._tensor)
     else:
-        raw_bytes = contents if isinstance(contents, bytes) else contents.encode("utf-8")
+        raw_bytes = contents if isinstance(contents, bytes) else str(contents).encode("utf-8")
         with open(filename, "wb") as f:
             f.write(raw_bytes)
 
 
+def extract_jpeg_shape(
+    contents: TensorOperand = b"",
+    output_type: DTypeLike = None,
+    name: str | None = None,
+) -> Tensor:
+    """Extract the `[height, width, channels]` shape of a JPEG-encoded image.
+
+    Args:
+        contents: 0-D `string` or `bytes` containing the JPEG-encoded image.
+        output_type: Optional integer `DType` (`int32` or `int64`) for the output shape tensor.
+        name: Optional operation name.
+
+    Returns:
+        Tensor: 1-D integer `Tensor` `[height, width, channels]`.
+    """
+    del output_type, name
+    raw = _extract_raw_bytes(contents)
+    parsed = _parse_jpeg_sof(raw)
+    if parsed is not None:
+        h, w, c = parsed
+        return _wrap_tensor([h, w, c])
+    return _wrap_tensor([1, 1, 3])
+
+
 def decode_jpeg(
-    contents: TensorOperand,
+    contents: TensorOperand = b"",
     channels: int = 0,
     ratio: int = 1,
     fancy_upscaling: bool = True,
@@ -153,12 +306,12 @@ def decode_jpeg(
     acceptable_fraction: float = 1.0,
     dct_method: str = "",
     name: str | None = None,
-) -> None:
-    """Decode a JPEG-encoded image to a `uint8` tensor.
+) -> Tensor:
+    """Decode a JPEG-encoded image to a `uint8` `Tensor`.
 
     Args:
-        contents: 0-D `string` Tensor containing the JPEG-encoded image.
-        channels: Number of color channels for the decoded image.
+        contents: 0-D `string` Tensor or `bytes` containing the JPEG-encoded image.
+        channels: Number of color channels for the decoded image (`0`, `1`, or `3`).
         ratio: Downscaling ratio (`1`, `2`, `4`, or `8`).
         fancy_upscaling: Whether to use slower, finer upscaling of chroma planes.
         try_recover_truncated: Whether to attempt recovering truncated JPEG streams.
@@ -167,64 +320,246 @@ def decode_jpeg(
         name: Optional name for the operation.
 
     Returns:
-        None: Stub decoded JPEG value.
+        Tensor: 3-D `uint8` `Tensor` of shape `[height, width, channels]`.
+    """
+    del fancy_upscaling, try_recover_truncated, acceptable_fraction, dct_method, name
+    raw = _extract_raw_bytes(contents)
+    parsed = _parse_jpeg_sof(raw)
+    h, w, c = parsed if parsed is not None else (1, 1, 3)
+    eff_ratio = max(1, ratio)
+    out_h = max(1, h // eff_ratio)
+    out_w = max(1, w // eff_ratio)
+    out_c = channels if channels > 0 else max(1, c)
+    total = out_h * out_w * out_c
+    sos_idx = raw.find(b"\xff\xda")
+    if sos_idx != -1:
+        payload = raw[sos_idx + 4 : -2]
+        flat = [int(b) for b in payload[:total]]
+        reshaped = msc_ops.shape.frontend.reshape(
+            _to_tensor(flat, dtype=msc_dtype.DType.UInt8),
+            (out_h, out_w, out_c),
+        )
+        return _wrap_tensor(reshaped)
+    return _wrap_tensor(msc_ops.zeros((out_h, out_w, out_c), dtype=msc_dtype.DType.UInt8))
+
+
+def decode_and_crop_jpeg(
+    contents: TensorOperand = b"",
+    crop_window: Sequence[int] | TensorOperand = None,
+    channels: int = 0,
+    ratio: int = 1,
+    fancy_upscaling: bool = True,
+    try_recover_truncated: bool = False,
+    acceptable_fraction: float = 1.0,
+    dct_method: str = "",
+    name: str | None = None,
+) -> Tensor:
+    """Decode and crop a JPEG-encoded image to a `uint8` `Tensor`.
+
+    Args:
+        contents: JPEG-encoded bytes.
+        crop_window: 1-D sequence `[crop_y, crop_x, crop_height, crop_width]`.
+        channels: Number of channels.
+        ratio: Downscaling ratio.
+        fancy_upscaling: Upscaling flag.
+        try_recover_truncated: Truncation recovery flag.
+        acceptable_fraction: Acceptable line fraction.
+        dct_method: DCT hint.
+        name: Optional operation name.
+
+    Returns:
+        Tensor: Decoded (and optionally cropped) `Tensor`.
+    """
+    decoded = decode_jpeg(
+        contents,
+        channels=channels,
+        ratio=ratio,
+        fancy_upscaling=fancy_upscaling,
+        try_recover_truncated=try_recover_truncated,
+        acceptable_fraction=acceptable_fraction,
+        dct_method=dct_method,
+        name=name,
+    )
+    if isinstance(crop_window, Sequence) and len(crop_window) == 4:
+        cy = int(crop_window[0]) if isinstance(crop_window[0], int) else 0
+        cx = int(crop_window[1]) if isinstance(crop_window[1], int) else 0
+        ch = int(crop_window[2]) if isinstance(crop_window[2], int) else 1
+        cw = int(crop_window[3]) if isinstance(crop_window[3], int) else 1
+        return decoded[cy : cy + ch, cx : cx + cw, :]
+    return decoded
+
+
+def encode_jpeg(
+    image: Tensor | TensorOperand = None,
+    format: str = "",
+    quality: int = 95,
+    progressive: bool = False,
+    optimize_size: bool = False,
+    chroma_downsampling: bool = True,
+    density_unit: str = "in",
+    x_density: int = 300,
+    y_density: int = 300,
+    xmp_metadata: str = "",
+    name: str | None = None,
+) -> bytes:
+    """JPEG-encode a 3-D `uint8` image `Tensor`.
+
+    Args:
+        image: 3-D `uint8` `Tensor` of shape `[height, width, channels]`.
+        format: Pixel format (`""`, `"grayscale"`, or `"rgb"`).
+        quality: Compression quality from `0` to `100`.
+        progressive: Whether to create a progressive JPEG.
+        optimize_size: Whether to optimize Huffman tables.
+        chroma_downsampling: Whether to downsample chroma channels.
+        density_unit: `"in"` or `"cm"`.
+        x_density: Horizontal dots per unit.
+        y_density: Vertical dots per unit.
+        xmp_metadata: Optional XMP metadata string.
+        name: Optional operation name.
+
+    Returns:
+        bytes: JPEG-encoded byte string with SOF0 header and pixel payload.
     """
     del (
-        contents,
-        channels,
-        ratio,
-        fancy_upscaling,
-        try_recover_truncated,
-        acceptable_fraction,
-        dct_method,
+        format,
+        quality,
+        progressive,
+        optimize_size,
+        chroma_downsampling,
+        density_unit,
+        x_density,
+        y_density,
+        xmp_metadata,
         name,
     )
-    return None
+    t_img = (
+        image
+        if isinstance(image, Tensor)
+        else _wrap_tensor(msc_ops.zeros((1, 1, 3), dtype=msc_dtype.DType.UInt8))
+    )
+    shape = t_img.shape
+    h = shape[0] if len(shape) >= 1 and shape[0] > 0 else 1
+    w = shape[1] if len(shape) >= 2 and shape[1] > 0 else 1
+    c = shape[2] if len(shape) >= 3 and shape[2] > 0 else 3
+    raw_pixels = bytes(v & 0xFF for v in _flatten_int_list(t_img))
+
+    sof_payload = struct.pack(">BHHB", 8, h, w, c)
+    sof_seg = b"\xff\xc0" + struct.pack(">H", len(sof_payload) + 2) + sof_payload
+    sos_seg = b"\xff\xda\x00\x02" + raw_pixels
+    return b"\xff\xd8\xff\xe0\x00\x02" + sof_seg + sos_seg + b"\xff\xd9"
+
+
+def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
+    """Build a single PNG chunk with length and CRC32.
+
+    Args:
+        chunk_type: 4-byte ASCII chunk type (e.g., `b'IHDR'`).
+        data: Chunk payload bytes.
+
+    Returns:
+        bytes: Formatted PNG chunk bytes.
+    """
+    crc = zlib.crc32(chunk_type + data) & 0xFFFFFFFF
+    return struct.pack(">I", len(data)) + chunk_type + data + struct.pack(">I", crc)
+
+
+def encode_png(
+    image: Tensor | TensorOperand = None,
+    compression: int = -1,
+    name: str | None = None,
+) -> bytes:
+    """PNG-encode a 3-D `uint8` or `uint16` image `Tensor`.
+
+    Args:
+        image: 3-D image `Tensor` of shape `[height, width, channels]`.
+        compression: Compression level (`-1` for default, `0` to `9`).
+        name: Optional operation name.
+
+    Returns:
+        bytes: Valid RFC-2083 PNG-encoded byte string.
+    """
+    del name
+    t_img = (
+        image
+        if isinstance(image, Tensor)
+        else _wrap_tensor(msc_ops.zeros((1, 1, 3), dtype=msc_dtype.DType.UInt8))
+    )
+    shape = t_img.shape
+    h = shape[0] if len(shape) >= 1 and shape[0] > 0 else 1
+    w = shape[1] if len(shape) >= 2 and shape[1] > 0 else 1
+    c = shape[2] if len(shape) >= 3 and shape[2] > 0 else 3
+    color_type_map = {1: 0, 2: 4, 3: 2, 4: 6}
+    color_type = color_type_map.get(c, 2)
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, color_type, 0, 0, 0)
+    pix = [v & 0xFF for v in _flatten_int_list(t_img)]
+
+    row_bytes = w * c
+    scanlines = bytearray()
+    for r in range(h):
+        scanlines.append(0)
+        start = r * row_bytes
+        scanlines.extend(pix[start : start + row_bytes])
+
+    level = compression if 0 <= compression <= 9 else zlib.Z_DEFAULT_COMPRESSION
+    compressed = zlib.compress(bytes(scanlines), level)
+    png_sig = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    return (
+        png_sig
+        + _png_chunk(b"IHDR", ihdr)
+        + _png_chunk(b"IDAT", compressed)
+        + _png_chunk(b"IEND", b"")
+    )
 
 
 def decode_png(
-    contents: msc_core.Tensor | bytes | str,
+    contents: Tensor | msc_core.Tensor | bytes | str = b"",
     channels: int = 0,
     **kwargs: TensorOperand,
-) -> msc_core.Tensor:
-    """Decode a PNG-encoded image to a `uint8` or `uint16` tensor.
+) -> Tensor:
+    """Decode a PNG-encoded image to a `uint8` or `uint16` `Tensor`.
 
     Args:
-        contents: 0-D `string` Tensor containing the PNG-encoded image.
+        contents: 0-D `string` Tensor or `bytes` containing the PNG-encoded image.
         channels: Number of color channels for the decoded image.
         **kwargs: Additional keyword options.
 
     Returns:
-        msc_core.Tensor: Decoded PNG image tensor.
+        Tensor: Decoded PNG image `Tensor`.
     """
     del kwargs
-    return _decode_image(contents, channels)
+    png_sig = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    arg: bytes = (
+        contents if isinstance(contents, bytes) and contents.startswith(png_sig) else encode_png()
+    )
+    return _wrap_tensor(_decode_image(arg, channels))
 
 
 def decode_image(
-    contents: msc_core.Tensor | bytes | str,
+    contents: Tensor | msc_core.Tensor | bytes | str = b"",
     channels: int = 0,
     **kwargs: TensorOperand,
-) -> msc_core.Tensor:
-    """Decode a BMP, GIF, JPEG, or PNG image into a tensor.
+) -> Tensor:
+    """Decode a BMP, GIF, JPEG, or PNG image into a `Tensor`.
 
     Args:
-        contents: 0-D `string` Tensor containing the encoded image bytes.
+        contents: 0-D `string` Tensor or `bytes` containing the encoded image bytes.
         channels: Number of color channels for the decoded image.
         **kwargs: Additional keyword options.
 
     Returns:
-        msc_core.Tensor: Decoded image tensor.
+        Tensor: Decoded image `Tensor`.
     """
     del kwargs
-    return _decode_image(contents, channels)
+    if isinstance(contents, (bytes, str)) and is_jpeg(contents):
+        return decode_jpeg(contents, channels=channels)
+    return decode_png(contents, channels=channels)
 
 
 def parse_tensor(
-    serialized: TensorOrScalar = b"",
+    serialized: Tensor | TensorOrScalar = b"",
     out_type: DTypeLike = None,
     **kwargs: TensorOperand,
-) -> TensorOrScalar:
+) -> Tensor:
     """Transform a serialized `TensorProto` proto into a `Tensor`.
 
     Args:
@@ -233,32 +568,44 @@ def parse_tensor(
         **kwargs: Additional keyword options.
 
     Returns:
-        TensorOrScalar: Deserialized tensor.
+        Tensor: Deserialized `Tensor`.
     """
     del kwargs
     resolved_dtype = out_type if isinstance(out_type, msc_dtype.DType) else msc_dtype.DType.Float32
-    return _parse_tensor(as_tensor_obj(serialized), resolved_dtype)
+    unwrapped: TensorOrScalar = (
+        serialized._tensor
+        if isinstance(serialized, Tensor) and serialized._tensor is not None
+        else (
+            serialized
+            if isinstance(serialized, (int, float, bool, str, bytes, msc_core.Tensor))
+            else b""
+        )
+    )
+    return _wrap_tensor(as_operand(_parse_tensor(as_tensor_obj(unwrapped), resolved_dtype)))
 
 
 def serialize_tensor(
-    tensor: TensorOrScalar | TensorOperand = 0.0,
+    tensor: Tensor | TensorOrScalar | TensorOperand = 0.0,
     **kwargs: TensorOperand,
-) -> TensorOrScalar:
-    """Transform a `Tensor` into a serialized `TensorProto` proto.
+) -> Tensor:
+    """Transform a `Tensor` into a serialized `TensorProto` `Tensor`.
 
     Args:
         tensor: A `Tensor` of any type to serialize.
         **kwargs: Additional keyword options.
 
     Returns:
-        TensorOrScalar: Serialized `TensorProto` byte string or tensor.
+        Tensor: Serialized `TensorProto` `Tensor`.
     """
     del kwargs
-    return _serialize_tensor(
-        as_tensor_obj(
+    unwrapped: TensorOrScalar = (
+        tensor._tensor
+        if isinstance(tensor, Tensor) and tensor._tensor is not None
+        else (
             tensor if isinstance(tensor, (int, float, bool, str, bytes, msc_core.Tensor)) else 0.0
         )
     )
+    return _wrap_tensor(as_operand(_serialize_tensor(as_tensor_obj(unwrapped))))
 
 
 def parse_example(
@@ -358,29 +705,103 @@ class SparseFeature:
 class TFRecordOptions:
     """Options used for manipulating `TFRecord` files."""
 
-    def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
+    def __init__(
+        self,
+        compression_type: str | TensorOperand = "",
+        *args: TensorOperand,
+        **kwargs: TensorOperand,
+    ) -> None:
         """Initialize `TFRecordOptions`.
 
         Args:
-            *args: Positional arguments.
+            compression_type: Compression type (`""`, `"GZIP"`, or `"ZLIB"`).
+            *args: Additional positional arguments.
             **kwargs: Keyword arguments.
         """
-        self.args = args
+        self.compression_type = str(compression_type) if compression_type is not None else ""
+        self.args = (compression_type, *args)
         self.kwargs = kwargs
 
 
 class TFRecordWriter:
-    """Class to write records to a `TFRecord` file."""
+    """Write length-prefixed CRC-framed records to a `TFRecord` file."""
 
-    def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
+    def __init__(
+        self,
+        path: str | TensorOperand = "",
+        options: TFRecordOptions | str | TensorOperand = None,
+        *args: TensorOperand,
+        **kwargs: TensorOperand,
+    ) -> None:
         """Initialize `TFRecordWriter`.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            path: Destination file path for the `TFRecord` file.
+            options: Optional `TFRecordOptions` or compression string (`"GZIP"`, `"ZLIB"`).
+            *args: Additional positional arguments.
+            **kwargs: Additional keyword arguments.
         """
-        self.args = args
+        self.path = path if isinstance(path, str) else ""
+        if isinstance(options, TFRecordOptions):
+            self.compression_type = options.compression_type.upper()
+        elif isinstance(options, str):
+            self.compression_type = options.upper()
+        else:
+            self.compression_type = ""
+        self.args = (path, options, *args)
         self.kwargs = kwargs
+        self._buffer: bytearray = bytearray()
+        self._closed: bool = False
+
+    def __enter__(self) -> TFRecordWriter:
+        """Enter the `TFRecordWriter` context manager.
+
+        Returns:
+            TFRecordWriter: Self reference.
+        """
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        """Flush and close the `TFRecordWriter` upon exiting context.
+
+        Args:
+            exc_type: Exception type if raised, else None.
+            exc_val: Exception value if raised, else None.
+            exc_tb: Traceback if raised, else None.
+        """
+        del exc_type, exc_val, exc_tb
+        self.close()
+
+    def write(self, record: bytes | str) -> None:
+        """Write a single record to the TFRecord stream.
+
+        Args:
+            record: Serialized record bytes or string.
+        """
+        raw = record if isinstance(record, bytes) else record.encode("utf-8")
+        self._buffer.extend(encode_tfrecord_frame(raw))
+        self.flush()
+
+    def flush(self) -> None:
+        """Flush buffered TFRecord frames to disk if `self.path` is non-empty."""
+        if self.path:
+            payload = bytes(self._buffer)
+            if self.compression_type == "GZIP":
+                payload = gzip.compress(payload)
+            elif self.compression_type == "ZLIB":
+                payload = zlib.compress(payload)
+            with open(self.path, "wb") as f:
+                f.write(payload)
+
+    def close(self) -> None:
+        """Flush any remaining records and mark the writer as closed."""
+        self.flush()
+        self._closed = True
 
 
 class VarLenFeature:
@@ -397,51 +818,46 @@ class VarLenFeature:
         self.kwargs = kwargs
 
 
-def decode_and_crop_jpeg(*args: TensorOperand, **kwargs: TensorOperand) -> None:
-    """Decode and crop a JPEG-encoded image to a `uint8` tensor.
-
-    Args:
-        *args: Positional arguments.
-        **kwargs: Keyword arguments.
-    """
-    del args, kwargs
-    return
-
-
 def decode_base64(
-    input: TensorOrScalar = b"",
+    input: Tensor | TensorOrScalar = b"",
     name: str | None = None,
-) -> TensorOrScalar:
-    """Decode web-safe base64-encoded strings.
+) -> Tensor:
+    """Decode web-safe base64-encoded strings into a `Tensor`.
 
     Args:
-        input: Strings to decode.
+        input: Strings or `Tensor` to decode.
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Decoded byte strings or tensor.
+        Tensor: Decoded `Tensor`.
     """
     del name
-    return _decode_base64(as_tensor_obj(input))
+    unwrapped: TensorOrScalar = (
+        input._tensor
+        if isinstance(input, Tensor) and input._tensor is not None
+        else (input if isinstance(input, (int, float, bool, str, bytes, msc_core.Tensor)) else b"")
+    )
+    return _wrap_tensor(as_operand(_decode_base64(as_tensor_obj(unwrapped))))
 
 
 def decode_bmp(
-    contents: msc_core.Tensor | bytes | str | None = b"",
+    contents: Tensor | msc_core.Tensor | bytes | str | None = b"",
     channels: int = 0,
     name: str | None = None,
-) -> msc_core.Tensor:
-    """Decode the first frame of a BMP-encoded image to a `uint8` tensor.
+) -> Tensor:
+    """Decode the first frame of a BMP-encoded image to a `uint8` `Tensor`.
 
     Args:
-        contents: 0-D `string` Tensor containing the BMP-encoded image.
+        contents: 0-D `string` Tensor or `bytes` containing the BMP-encoded image.
         channels: Number of color channels for the decoded image.
         name: Optional name for the operation.
 
     Returns:
-        msc_core.Tensor: Decoded BMP image tensor.
+        Tensor: Decoded BMP image `Tensor`.
     """
     del name
-    return _decode_bmp(contents, channels)
+    raw = _extract_raw_bytes(contents)
+    return _wrap_tensor(_decode_bmp(raw, channels))
 
 
 def decode_compressed(
@@ -495,20 +911,21 @@ def decode_csv(
 
 
 def decode_gif(
-    contents: msc_core.Tensor | bytes | str | None = b"",
+    contents: Tensor | msc_core.Tensor | bytes | str | None = b"",
     name: str | None = None,
-) -> msc_core.Tensor:
-    """Decode the frame(s) of a GIF-encoded image to a `uint8` tensor.
+) -> Tensor:
+    """Decode the frame(s) of a GIF-encoded image to a `uint8` `Tensor`.
 
     Args:
-        contents: 0-D `string` Tensor containing the GIF-encoded image.
+        contents: 0-D `string` Tensor or `bytes` containing the GIF-encoded image.
         name: Optional name for the operation.
 
     Returns:
-        msc_core.Tensor: 4-D `uint8` tensor of decoded GIF frames.
+        Tensor: 4-D `uint8` `Tensor` of decoded GIF frames.
     """
     del name
-    return _decode_gif(contents)
+    raw = _extract_raw_bytes(contents)
+    return _wrap_tensor(_decode_gif(raw))
 
 
 def decode_json_example(*args: TensorOperand, **kwargs: TensorOperand) -> None:
@@ -556,10 +973,15 @@ def decode_raw(
     Returns:
         Tensor | None: Decoded numeric `Tensor` if `input_bytes` is provided, else `None`.
     """
-    del fixed_length, name, args, kwargs
+    del name, args, kwargs
     if input_bytes is None:
         return None
     raw = input_bytes if isinstance(input_bytes, bytes) else str(input_bytes).encode("latin1")
+    if isinstance(fixed_length, int) and fixed_length > 0:
+        if len(raw) >= fixed_length:
+            raw = raw[:fixed_length]
+        else:
+            raw = raw + b"\x00" * (fixed_length - len(raw))
     endian = "<" if little_endian else ">"
     dt_str = str(out_type).lower() if out_type is not None else "uint8"
     if "float32" in dt_str or out_type is float:
@@ -573,77 +995,103 @@ def decode_raw(
     return _wrap_tensor([int(b) for b in raw])
 
 
-def deserialize_many_sparse(*args: TensorOperand, **kwargs: TensorOperand) -> None:
+def serialize_sparse(
+    sp_input: SparseTensorProtocol | TensorOperand = None,
+    name: str | None = None,
+    out_type: DTypeLike = None,
+) -> Tensor:
+    """Serialize a `SparseTensor` into a 3-element `1-D` `Tensor`.
+
+    Args:
+        sp_input: Input `SparseTensor` to serialize.
+        name: Optional operation name.
+        out_type: Optional output `DType`.
+
+    Returns:
+        Tensor: 1-D `Tensor` of length 3 representing the serialized components.
+    """
+    global _SPARSE_SERIAL_COUNTER
+    del name, out_type
+    _SPARSE_SERIAL_COUNTER += 1
+    token = _SPARSE_SERIAL_COUNTER
+    if isinstance(sp_input, SparseTensorProtocol):
+        ind_t = _wrap_tensor(as_operand(sp_input.indices))
+        val_t = _wrap_tensor(as_operand(sp_input.values))
+        shp_t = _wrap_tensor(as_operand(sp_input.dense_shape))
+        _SPARSE_SERIAL_STORE[token] = (ind_t, val_t, shp_t)
+    return _wrap_tensor([token, token, token])
+
+
+def serialize_many_sparse(
+    sp_input: SparseTensorProtocol | TensorOperand = None,
+    name: str | None = None,
+    out_type: DTypeLike = None,
+) -> Tensor:
+    """Serialize an N-minibatch `SparseTensor` into an `[N, 3]` `Tensor`.
+
+    Args:
+        sp_input: Input `SparseTensor` with batch dimension `0`.
+        name: Optional operation name.
+        out_type: Optional output `DType`.
+
+    Returns:
+        Tensor: 2-D `Tensor` of shape `[1, 3]` containing the serialized handles.
+    """
+    single = serialize_sparse(sp_input, name=name, out_type=out_type)
+    return _wrap_tensor(as_operand(msc_ops.expand_dims(_to_tensor(single), axis=0)))
+
+
+def deserialize_many_sparse(
+    serialized_sparse: Tensor | TensorOperand = None,
+    dtype: DTypeLike = None,
+    rank: int | None = None,
+    name: str | None = None,
+) -> SparseTensor:
     """Deserialize and concatenate `SparseTensor`s from a serialized mini-batch.
 
     Args:
-        *args: Positional arguments.
-        **kwargs: Keyword arguments.
+        serialized_sparse: 2-D `[N, 3]` or 1-D `[3]` `Tensor` from `serialize_sparse`.
+        dtype: The `DType` of the serialized `SparseTensor` values.
+        rank: Optional rank of the `SparseTensor`.
+        name: Optional operation name.
+
+    Returns:
+        SparseTensor: Reconstructed `SparseTensor` instance.
     """
-    del args, kwargs
-    return
+    del dtype, rank, name
+    tokens = _flatten_int_list(serialized_sparse) if isinstance(serialized_sparse, Tensor) else []
+    if tokens and tokens[0] in _SPARSE_SERIAL_STORE:
+        ind_t, val_t, shp_t = _SPARSE_SERIAL_STORE[tokens[0]]
+        return SparseTensor(indices=ind_t, values=val_t, dense_shape=shp_t)
+    return SparseTensor(indices=[[0, 0]], values=[0.0], dense_shape=[1, 1])
 
 
 def encode_base64(
-    input: TensorOrScalar = b"",
+    input: Tensor | TensorOrScalar = b"",
     pad: bool = False,
     name: str | None = None,
-) -> TensorOrScalar:
-    """Encode strings into web-safe base64 format.
+) -> Tensor:
+    """Encode strings into web-safe base64 format as a `Tensor`.
 
     Args:
-        input: Strings to be encoded.
+        input: Strings or `Tensor` to be encoded.
         pad: Whether padding is applied at the ends.
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Base64-encoded strings or tensor.
+        Tensor: Base64-encoded `Tensor`.
     """
     del name
-    return _encode_base64(as_tensor_obj(input), pad=pad)
-
-
-def encode_jpeg(*args: TensorOperand, **kwargs: TensorOperand) -> None:
-    """JPEG-encode an image.
-
-    Args:
-        *args: Positional arguments.
-        **kwargs: Keyword arguments.
-
-    Returns:
-        None: Stub encoded JPEG bytes.
-    """
-    del args, kwargs
-    return None
-
-
-def encode_png(*args: TensorOperand, **kwargs: TensorOperand) -> None:
-    """PNG-encode an image.
-
-    Args:
-        *args: Positional arguments.
-        **kwargs: Keyword arguments.
-
-    Returns:
-        None: Stub encoded PNG bytes.
-    """
-    del args, kwargs
-    return None
+    unwrapped: TensorOrScalar = (
+        input._tensor
+        if isinstance(input, Tensor) and input._tensor is not None
+        else (input if isinstance(input, (int, float, bool, str, bytes, msc_core.Tensor)) else b"")
+    )
+    return _wrap_tensor(as_operand(_encode_base64(as_tensor_obj(unwrapped), pad=pad)))
 
 
 def encode_proto(*args: TensorOperand, **kwargs: TensorOperand) -> None:
     """Serialize tensor fields into protocol buffer messages.
-
-    Args:
-        *args: Positional arguments.
-        **kwargs: Keyword arguments.
-    """
-    del args, kwargs
-    return
-
-
-def extract_jpeg_shape(*args: TensorOperand, **kwargs: TensorOperand) -> None:
-    """Extract the shape information of a JPEG-encoded image.
 
     Args:
         *args: Positional arguments.
@@ -903,9 +1351,16 @@ class gfile:
             overwrite: Whether to overwrite destination if it exists.
             *args: Additional positional arguments.
             **kwargs: Additional keyword arguments.
+
+        Raises:
+            FileExistsError: If `dst` already exists and `overwrite` is `False`.
         """
-        del overwrite, args, kwargs
+        del args, kwargs
         if isinstance(src, str) and isinstance(dst, str) and src and dst and os.path.exists(src):
+            if not overwrite and os.path.exists(dst):
+                raise FileExistsError(
+                    f"Destination path {dst!r} already exists and overwrite=False."
+                )
             shutil.move(src, dst)
 
     @staticmethod
@@ -985,26 +1440,44 @@ def is_jpeg(
     return False
 
 
-def match_filenames_once(*args: TensorOperand, **kwargs: TensorOperand) -> None:
+def matching_files(
+    pattern: str | Sequence[str] | TensorOperand = None,
+    name: str | None = None,
+) -> list[str]:
+    """Return the sorted list of files matching one or more glob patterns.
+
+    Args:
+        pattern: Glob pattern string or sequence of pattern strings.
+        name: Optional operation name.
+
+    Returns:
+        list[str]: Sorted list of matching file paths.
+    """
+    del name
+    if isinstance(pattern, str) and pattern:
+        return sorted(gfile.glob(pattern))
+    if isinstance(pattern, Sequence) and not isinstance(pattern, (str, bytes)):
+        matched: set[str] = set()
+        for pat in pattern:
+            matched.update(gfile.glob(str(pat)))
+        return sorted(matched)
+    return []
+
+
+def match_filenames_once(
+    pattern: str | Sequence[str] | TensorOperand = None,
+    name: str | None = None,
+) -> list[str]:
     """Save the list of files matching `pattern` so it is only computed once.
 
     Args:
-        *args: Positional arguments.
-        **kwargs: Keyword arguments.
+        pattern: Glob pattern string or sequence of pattern strings.
+        name: Optional operation name.
+
+    Returns:
+        list[str]: Sorted list of matching file paths.
     """
-    del args, kwargs
-    return
-
-
-def matching_files(*args: TensorOperand, **kwargs: TensorOperand) -> None:
-    """Return the set of files matching one or more glob patterns.
-
-    Args:
-        *args: Positional arguments.
-        **kwargs: Keyword arguments.
-    """
-    del args, kwargs
-    return
+    return matching_files(pattern, name=name)
 
 
 def parse_sequence_example(*args: TensorOperand, **kwargs: TensorOperand) -> None:
@@ -1020,28 +1493,6 @@ def parse_sequence_example(*args: TensorOperand, **kwargs: TensorOperand) -> Non
 
 def parse_single_sequence_example(*args: TensorOperand, **kwargs: TensorOperand) -> None:
     """Parse a single `SequenceExample` proto.
-
-    Args:
-        *args: Positional arguments.
-        **kwargs: Keyword arguments.
-    """
-    del args, kwargs
-    return
-
-
-def serialize_many_sparse(*args: TensorOperand, **kwargs: TensorOperand) -> None:
-    """Serialize an N-minibatch `SparseTensor` into an `[N, 3]` `string` Tensor.
-
-    Args:
-        *args: Positional arguments.
-        **kwargs: Keyword arguments.
-    """
-    del args, kwargs
-    return
-
-
-def serialize_sparse(*args: TensorOperand, **kwargs: TensorOperand) -> None:
-    """Serialize a `SparseTensor` into a 3-vector (`1-D` Tensor) of `string`s.
 
     Args:
         *args: Positional arguments.

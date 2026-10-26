@@ -4,11 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from tests.conftest import install_fake_tensorflow
-
 import pytest
-
-install_fake_tensorflow()
 
 
 @pytest.fixture(autouse=True)

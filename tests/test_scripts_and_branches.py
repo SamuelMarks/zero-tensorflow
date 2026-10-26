@@ -132,7 +132,15 @@ def test_remaining_src_branches(tmp_path: Path) -> None:
     # Autodiff branches: kwargs in @tf.function, nested tracing, unconnected zero
     @tf.function
     def fn_with_kw(a: int, b: float = 2.0) -> str:
-        """Trace function with keyword argument and string return."""
+        """Trace function with keyword argument and string return.
+
+        Args:
+            a: Integer input.
+            b: Float keyword input.
+
+        Returns:
+            str: Constant status string.
+        """
         _ = tf.Tensor(a) + tf.Tensor(b)
         return "done"
 
@@ -140,12 +148,32 @@ def test_remaining_src_branches(tmp_path: Path) -> None:
 
     @tf.function
     def fn_nested() -> tuple[tf.Tensor, str]:
-        """Trace nested function returning tuple with non-tensor item."""
+        """Trace nested function returning tuple with non-tensor item.
+
+        Returns:
+            tuple[tf.Tensor, str]: Sum tensor and inner status string.
+        """
         inner_res = fn_with_kw(2)
         return (tf.Tensor(1.0) + tf.Tensor(2.0), inner_res)
 
     nested_out = fn_nested()
     assert nested_out[1] == "done"
+
+    @tf.function
+    def fn_tensor_out(x_in: tf.Tensor, y_in: tf.Tensor) -> tf.Tensor:
+        """Trace function returning a single traced `Tensor` node.
+
+        Args:
+            x_in: First input tensor.
+            y_in: Second input tensor.
+
+        Returns:
+            tf.Tensor: Elementwise sum tensor.
+        """
+        return x_in + y_in
+
+    tensor_out = fn_tensor_out(tf.Tensor(1.0), tf.Tensor(2.0))
+    assert tensor_out.numpy() == 3.0
 
     empty_t = tf.Tensor()
     x_var = tf.Variable(2.0)
@@ -389,6 +417,7 @@ def test_remaining_src_branches(tmp_path: Path) -> None:
         strings.strip(traced_str)
         strings.substr(traced_str, 0, 1)
         strings.to_hash_bucket(traced_str, 5)
+        strings.to_hash_bucket_strong(traced_str, 5, [1, 2])
         strings.upper(traced_str)
     finally:
         _tracer.is_tracing = prev_tracing
@@ -435,6 +464,9 @@ def test_scripts_check_imports(tmp_path: Path) -> None:
     assert not check_imports.is_stdlib("nonexistent_third_party_pkg_xyz")
     assert check_imports.check_module("zero_tensorflow")
     assert check_imports.check_module("ml_switcheroo_ir")
+    assert check_imports.check_module("pytest", is_test_or_script=True)
+    assert not check_imports.check_module("pytest", is_test_or_script=False)
+    assert not check_imports.check_module("numpy", is_test_or_script=True)
     assert not check_imports.check_module("nonexistent_third_party_pkg_xyz")
 
     nl = chr(10)
@@ -460,12 +492,14 @@ def test_scripts_check_imports(tmp_path: Path) -> None:
                 "y = sys.modules[__name__]",
                 "z = sys.modules[some_var]",
                 "d = obj.__dict__",
+                "bad_t = Any",
+                "def __getattr__(name: str) -> int: return 1",
             ]
         ),
         encoding="utf-8",
     )
     errs = check_imports.check_file(str(disallowed_file))
-    assert len(errs) >= 7
+    assert len(errs) >= 9
     assert check_imports.main(str(disallowed_file)) == 1
     assert check_imports.main("src/zero_tensorflow/dtypes.py") == 0
 
@@ -477,6 +511,7 @@ def test_scripts_check_api_parity(tmp_path: Path) -> None:
         tmp_path: Temporary directory fixture.
     """
     assert check_api_parity.main("snapshots/tf_api.json") == 0
+    assert check_api_parity.main(argv=["--check", "--snapshot", "snapshots/tf_api.json"]) == 0
     assert check_api_parity.main(str(tmp_path / "missing.json")) == 1
 
     class _FakeMath:
@@ -520,6 +555,92 @@ def test_scripts_check_api_parity(tmp_path: Path) -> None:
     )
     paths = check_api_parity.load_ecosystem_snapshot_paths(str(fake_snap))
     assert "tf.abs" in paths
+    assert check_api_parity._resolve_v005_snapshot_file(None) != ""
+
+    assert check_api_parity.parse_todo_unchecked(str(tmp_path / "no_todo.md")) == set()
+    assert check_api_parity.resolve_tf_symbol(tf, "other.abs") == (False, None)
+    assert check_api_parity.resolve_tf_symbol(tf, "tf.nonexistent_xyz") == (False, None)
+
+    from ml_switcheroo_ir.schema.ghost import GhostParam, GhostRef, ParameterKind
+
+    ref_missing = GhostRef(name="nope", api_path="tf.nope_xyz", kind="function")
+    assert check_api_parity.verify_v005_ref(tf, ref_missing) == [
+        "Missing minimum v0.0.5 API: tf.nope_xyz"
+    ]
+
+    ref_not_cls = GhostRef(name="abs", api_path="tf.abs", kind="class")
+    assert "expected class" in check_api_parity.verify_v005_ref(tf, ref_not_cls)[0]
+
+    ref_not_fn = GhostRef(name="version", api_path="tf.version.VERSION", kind="function")
+    assert "expected callable" in check_api_parity.verify_v005_ref(tf, ref_not_fn)[0]
+
+    class _FakeTargetMod:
+        """Fake module for v0.0.5 verification edge cases."""
+
+        keras = "not_zero_keras"
+
+        class DoclessCls:
+            """Fake class whose docstring and annotation are cleared at runtime."""
+
+            FIELD_A = 1
+
+            def __init__(self, a: int, b: int) -> None:
+                """Initialize `DoclessCls`.
+
+                Args:
+                    a: First arg.
+                    b: Second arg.
+                """
+                self.a = a
+                self.b = b
+
+    _FakeTargetMod.DoclessCls.__doc__ = ""
+    _FakeTargetMod.DoclessCls.__init__.__annotations__.pop("a", None)
+    ref_edge = GhostRef(
+        name="DoclessCls",
+        api_path="tf.DoclessCls",
+        kind="class",
+        aliases=["tf.keras.Ignored", "tf.MissingAlias"],
+        params=[
+            GhostParam(name="self", kind=ParameterKind.POSITIONAL_OR_KEYWORD),
+            GhostParam(name="a", kind=ParameterKind.POSITIONAL_OR_KEYWORD),
+            GhostParam(name="b", kind=ParameterKind.POSITIONAL_OR_KEYWORD, default="1"),
+            GhostParam(name="FIELD_A", kind=ParameterKind.POSITIONAL_OR_KEYWORD),
+            GhostParam(name="missing_p", kind=ParameterKind.POSITIONAL_OR_KEYWORD),
+        ],
+    )
+    edge_errs = check_api_parity.verify_v005_ref(_FakeTargetMod, ref_edge)
+    assert any("missing docstring" in e for e in edge_errs)
+    assert any("missing alias tf.MissingAlias" in e for e in edge_errs)
+    assert any("missing type annotation" in e for e in edge_errs)
+    assert any("missing default value" in e for e in edge_errs)
+    assert any("missing parameter/field 'missing_p'" in e for e in edge_errs)
+
+    assert check_api_parity.check_v005_minimum_compliance(
+        _FakeTargetMod, ecosystem_snapshot_path=str(tmp_path / "missing_v005.json")
+    ) == (0, 0, [])
+
+    v005_test_snap = tmp_path / "v005_test.json"
+    v005_test_snap.write_text(
+        '{"target": "tensorflow", "version": "2.21.0", "categories": {"array": ['
+        '{"name": "DoclessCls", "api_path": "tf.DoclessCls", "kind": "class", "params": []},'
+        '{"name": "ExemptItem", "api_path": "tf.ExemptItem", "kind": "class", "params": []},'
+        '{"name": "Dense", "api_path": "tf.keras.layers.Dense", "kind": "class", "params": []}'
+        "]}}",
+        encoding="utf-8",
+    )
+    todo_plan_tmp = tmp_path / "todo_tmp.md"
+    todo_plan_tmp.write_text(
+        "- [ ] `tf.ExemptItem` (`class`)\n- [ ] no_backticks\n", encoding="utf-8"
+    )
+    _, total_c, viols = check_api_parity.check_v005_minimum_compliance(
+        _FakeTargetMod,
+        ecosystem_snapshot_path=str(v005_test_snap),
+        todo_plan_path=str(todo_plan_tmp),
+    )
+    assert total_c == 2
+    assert any("tf.keras must delegate directly to zero_keras" in v for v in viols)
+    assert check_api_parity.parse_todo_unchecked(str(tmp_path / "no_todo.md")) == set()
 
 
 def test_scripts_generate_api_snapshot(tmp_path: Path) -> None:
@@ -538,12 +659,12 @@ def test_scripts_generate_api_snapshot(tmp_path: Path) -> None:
         val: int = 1
 
     class _FakeRootTF(types.ModuleType):
-        """Typed fake root tensorflow module."""
+        """Typed fake root zero_tensorflow module."""
 
         def __init__(self) -> None:
             """Initialize `_FakeRootTF`."""
-            super().__init__("tensorflow")
-            self.sub = _FakeSubMod("tensorflow.sub")
+            super().__init__("zero_tensorflow")
+            self.sub = _FakeSubMod("zero_tensorflow.sub")
             self.ext = types.ModuleType("other_pkg.sub")
             self.Cls = _DummyContainer
             self.fn = lambda: None
@@ -576,17 +697,11 @@ def test_scripts_generate_api_snapshot(tmp_path: Path) -> None:
     assert out_file.exists()
 
     out_file2 = tmp_path / "out_api2.json"
-    import sys
-
-    saved_tf = sys.modules.get("tensorflow")
-    try:
-        sys.modules["tensorflow"] = fake_tf
-        generate_api_snapshot.generate_snapshot(output_path=str(out_file2))
-        sys.modules["tensorflow"] = types.ModuleType("invalid")
-        generate_api_snapshot.generate_snapshot(output_path=str(out_file2))
-    finally:
-        if saved_tf is not None:
-            sys.modules["tensorflow"] = saved_tf
+    missing_eco = tmp_path / "missing_eco.json"
+    generate_api_snapshot.generate_snapshot(
+        output_path=str(out_file2),
+        ecosystem_snapshot_path=str(missing_eco),
+    )
     assert out_file2.exists()
 
     bad_eco = tmp_path / "bad_eco.json"
@@ -748,3 +863,27 @@ def test_scripts_update_badges(tmp_path: Path) -> None:
     assert (
         update_badges.main(["--readme", str(readme), "--cov-json", str(low_cov), "--enforce"]) == 1
     )
+
+
+def test_ci_workflow_configuration() -> None:
+    """Verify CI workflow, pre-commit hooks, and dev setup scripts enforce ecosystem invariants."""
+    repo_root = Path(__file__).resolve().parent.parent
+    ci_yml = (repo_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "UV_DYNAMIC_VERSIONING_BYPASS" in ci_yml
+    assert "PDM_BUILD_SCM_VERSION" in ci_yml
+    assert "path: ../" not in ci_yml
+    assert "--cov-report=json" in ci_yml
+    assert ci_yml.index("ml-ecosystem-snapshots") < ci_yml.index(
+        "pip install -e ../ml-switcheroo-ir"
+    )
+
+    pre_commit = (repo_root / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    assert "--cov-report=json" in pre_commit
+    assert 'pytest -m "reference"' in pre_commit
+
+    setup_sh = (repo_root / "setup_dev_env.sh").read_text(encoding="utf-8")
+    assert "UV_DYNAMIC_VERSIONING_BYPASS" in setup_sh
+    assert "PDM_BUILD_SCM_VERSION" in setup_sh
+
+    pyproject = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'requires-python = ">=3.10"' in pyproject

@@ -4,16 +4,22 @@ from __future__ import annotations
 
 import zero_tensorflow as tf
 
-import numpy as np
-
 
 def test_autograph_stubs() -> None:
     """Verify `tf.autograph.experimental` classes and functions."""
-    feat = tf.autograph.experimental.Feature()
-    assert feat is not None
+    feat = tf.autograph.experimental.Feature.ALL
+    assert feat.value == "ALL"
 
     def fn(*args: tf.Tensor | float, **kwargs: tf.Tensor | float) -> float:
-        """Return first numeric argument."""
+        """Return first numeric argument.
+
+        Args:
+            *args: Positional arguments.
+            **kwargs: Keyword arguments.
+
+        Returns:
+            float: Constant float result.
+        """
         del kwargs
         return 1.0 if not args else 2.0
 
@@ -50,7 +56,7 @@ def test_summary_stubs() -> None:
     with tf.summary.experimental.summary_scope("scope_a") as (s_name, s_val):
         assert s_name == "summary_scope"
         assert s_val is None
-    assert tf.summary.experimental.write_raw_pb(b"pb") is None
+    assert tf.summary.experimental.write_raw_pb(b"pb") is True
     tf.summary.image("img", [[1.0]])
 
 
@@ -77,35 +83,35 @@ def test_config_stubs() -> None:
     """Verify `tf.config` experimental, optimizer, and threading APIs."""
     assert tf.config.experimental.ClusterDeviceFilters() is not None
     assert tf.config.experimental.VirtualDeviceConfiguration() is not None
-    assert tf.config.experimental.disable_mlir_bridge() is None
-    assert tf.config.experimental.enable_mlir_bridge() is None
-    assert tf.config.experimental.enable_op_determinism() is None
-    assert tf.config.experimental.enable_tensor_float_32_execution(True) is None
-    assert tf.config.experimental.get_device_details("CPU:0") is None
-    assert tf.config.experimental.get_device_policy() is None
-    assert tf.config.experimental.get_memory_growth("GPU:0") is None
-    assert tf.config.experimental.get_memory_info("GPU:0") is None
-    assert tf.config.experimental.get_memory_usage("GPU:0") is None
-    assert tf.config.experimental.get_synchronous_execution() is None
-    assert tf.config.experimental.get_virtual_device_configuration("GPU:0") is None
-    assert tf.config.experimental.get_visible_devices() is None
-    assert tf.config.experimental.list_logical_devices() is None
-    assert tf.config.experimental.list_physical_devices() is None
-    assert tf.config.experimental.reset_memory_stats("GPU:0") is None
-    assert tf.config.experimental.set_device_policy("explicit") is None
-    assert tf.config.experimental.set_memory_growth("GPU:0", True) is None
-    assert tf.config.experimental.set_synchronous_execution(True) is None
-    assert tf.config.experimental.set_virtual_device_configuration("GPU:0", []) is None
-    assert tf.config.experimental.set_visible_devices([], "GPU") is None
-    assert tf.config.experimental.tensor_float_32_execution_enabled() is None
-    assert tf.config.optimizer.get_experimental_options() is None
-    assert tf.config.optimizer.get_jit() is None
-    assert tf.config.optimizer.set_experimental_options({}) is None
-    assert tf.config.optimizer.set_jit(True) is None
-    assert tf.config.threading.get_inter_op_parallelism_threads() is None
-    assert tf.config.threading.get_intra_op_parallelism_threads() is None
-    assert tf.config.threading.set_inter_op_parallelism_threads(2) is None
-    assert tf.config.threading.set_intra_op_parallelism_threads(2) is None
+    tf.config.experimental.disable_mlir_bridge()
+    tf.config.experimental.enable_mlir_bridge()
+    tf.config.experimental.enable_op_determinism()
+    tf.config.experimental.enable_tensor_float_32_execution(True)
+    assert tf.config.experimental.get_device_details("CPU:0") == {"device_name": "CPU:0"}
+    tf.config.experimental.set_device_policy("explicit")
+    assert tf.config.experimental.get_device_policy() == "explicit"
+    tf.config.experimental.set_memory_growth("GPU:0", True)
+    assert tf.config.experimental.get_memory_growth("GPU:0") is True
+    assert tf.config.experimental.get_memory_info("GPU:0") == {"current": 0, "peak": 0}
+    assert tf.config.experimental.get_memory_usage("GPU:0") == 0
+    tf.config.experimental.set_synchronous_execution(True)
+    assert tf.config.experimental.get_synchronous_execution() is True
+    tf.config.experimental.set_virtual_device_configuration("GPU:0", [])
+    assert tf.config.experimental.get_virtual_device_configuration("GPU:0") == []
+    tf.config.experimental.set_visible_devices([], "GPU")
+    assert tf.config.experimental.get_visible_devices() == []
+    assert len(tf.config.experimental.list_logical_devices()) == 1
+    assert tf.config.experimental.list_physical_devices() == []
+    tf.config.experimental.reset_memory_stats("GPU:0")
+    assert tf.config.experimental.tensor_float_32_execution_enabled() is True
+    tf.config.optimizer.set_experimental_options({})
+    assert tf.config.optimizer.get_experimental_options() == {}
+    tf.config.optimizer.set_jit(True)
+    assert tf.config.optimizer.get_jit() is True
+    tf.config.threading.set_inter_op_parallelism_threads(2)
+    assert tf.config.threading.get_inter_op_parallelism_threads() == 2
+    tf.config.threading.set_intra_op_parallelism_threads(2)
+    assert tf.config.threading.get_intra_op_parallelism_threads() == 2
 
 
 def test_losses_stubs() -> None:
@@ -113,30 +119,26 @@ def test_losses_stubs() -> None:
     assert tf.losses.Reduction("auto") == tf.losses.Reduction.AUTO
     y_true = tf.Tensor([1.0, 2.0])
     y_pred = tf.Tensor([1.0, 2.0])
-    np.testing.assert_allclose(tf.losses.mse(y_true, y_pred).numpy(), 0.0)
-    np.testing.assert_allclose(tf.losses.mae(y_true, y_pred).numpy(), 0.0)
-    np.testing.assert_allclose(tf.losses.mape(y_true, y_pred).numpy(), 0.0)
-    np.testing.assert_allclose(tf.losses.msle(y_true, y_pred).numpy(), 0.0)
-    np.testing.assert_allclose(tf.losses.logcosh(y_true, y_pred).numpy(), 0.0)
-    np.testing.assert_allclose(tf.losses.kld(y_true, y_pred).numpy(), 0.0, atol=1e-5)
-    np.testing.assert_allclose(
-        tf.losses.kullback_leibler_divergence(y_true, y_pred).numpy(), 0.0, atol=1e-5
-    )
+    tf.debugging.assert_near(tf.losses.mse(y_true, y_pred), 0.0)
+    tf.debugging.assert_near(tf.losses.mae(y_true, y_pred), 0.0)
+    tf.debugging.assert_near(tf.losses.mape(y_true, y_pred), 0.0)
+    tf.debugging.assert_near(tf.losses.msle(y_true, y_pred), 0.0)
+    tf.debugging.assert_near(tf.losses.logcosh(y_true, y_pred), 0.0)
+    tf.debugging.assert_near(tf.losses.kld(y_true, y_pred), 0.0, atol=1e-5)
+    tf.debugging.assert_near(tf.losses.kullback_leibler_divergence(y_true, y_pred), 0.0, atol=1e-5)
 
 
 def test_metrics_stubs() -> None:
     """Verify `tf.metrics` functional metric aliases."""
     y_true = tf.Tensor([1.0, 2.0])
     y_pred = tf.Tensor([1.0, 2.0])
-    np.testing.assert_allclose(tf.metrics.mse(y_true, y_pred).numpy(), 0.0)
-    np.testing.assert_allclose(tf.metrics.mae(y_true, y_pred).numpy(), 0.0)
-    np.testing.assert_allclose(tf.metrics.mape(y_true, y_pred).numpy(), 0.0)
-    np.testing.assert_allclose(tf.metrics.msle(y_true, y_pred).numpy(), 0.0)
-    np.testing.assert_allclose(tf.metrics.logcosh(y_true, y_pred).numpy(), 0.0)
-    np.testing.assert_allclose(tf.metrics.kld(y_true, y_pred).numpy(), 0.0, atol=1e-5)
-    np.testing.assert_allclose(
-        tf.metrics.kullback_leibler_divergence(y_true, y_pred).numpy(), 0.0, atol=1e-5
-    )
+    tf.debugging.assert_near(tf.metrics.mse(y_true, y_pred), 0.0)
+    tf.debugging.assert_near(tf.metrics.mae(y_true, y_pred), 0.0)
+    tf.debugging.assert_near(tf.metrics.mape(y_true, y_pred), 0.0)
+    tf.debugging.assert_near(tf.metrics.msle(y_true, y_pred), 0.0)
+    tf.debugging.assert_near(tf.metrics.logcosh(y_true, y_pred), 0.0)
+    tf.debugging.assert_near(tf.metrics.kld(y_true, y_pred), 0.0, atol=1e-5)
+    tf.debugging.assert_near(tf.metrics.kullback_leibler_divergence(y_true, y_pred), 0.0, atol=1e-5)
 
 
 def test_optimizers_stubs() -> None:

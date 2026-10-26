@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from zero_tensorflow._typing import DTypeLike, TensorOperand
 from zero_tensorflow.core_tensor import Tensor, _to_tensor, _wrap_tensor, to_dtype
@@ -146,16 +146,22 @@ def irfft(
     if input_tensor is None:
         return _wrap_tensor(_ops.zeros((1,)))
     t_in = _ensure_tensor(input_tensor)
-    full_ifft = as_tensor_obj(_ops.ifft(t_in))
-    real_out = _k_ops.real(full_ifft)
-    if fft_length is not None:
+    if fft_length is not None and t_in.shape:
         target_len = (
             int(fft_length[0])
             if isinstance(fft_length, Sequence) and fft_length
             else (int(fft_length) if isinstance(fft_length, int) else 1)
         )
-        if real_out.shape and real_out.shape[-1] != target_len:
-            return _wrap_tensor(_ops.zeros((*real_out.shape[:-1], target_len)))
+        cur_len = t_in.shape[-1]
+        last_axis = len(t_in.shape) - 1
+        if cur_len > target_len:
+            t_in = as_tensor_obj(_k_ops.slice(t_in, last_axis, 0, target_len, 1))
+        elif cur_len < target_len:
+            pad_shape = (*t_in.shape[:-1], target_len - cur_len)
+            pad_zeros = _ops.zeros(pad_shape, dtype=t_in.dtype)
+            t_in = as_tensor_obj(_k_ops.concatenate([t_in, pad_zeros], axis=last_axis))
+    full_ifft = as_tensor_obj(_ops.ifft(t_in))
+    real_out = _k_ops.real(full_ifft)
     return _wrap_tensor(real_out)
 
 
@@ -222,68 +228,132 @@ def fft3d(
 
 
 def stft(
-    input: Tensor | TensorOperand,
-    nfft: int = 10,
-    noverlap: int = 0,
+    signals: Tensor | TensorOperand,
+    frame_length: int | None = None,
+    frame_step: int | None = None,
+    fft_length: int | None = None,
+    window_fn: Callable[[int], Tensor] | None = None,
+    pad_end: bool = False,
+    name: str | None = None,
     *args: TensorOperand,
     **kwargs: TensorOperand,
 ) -> Tensor:
-    """Compute the Short-time Fourier Transform of `input`.
+    """Compute the Short-time Fourier Transform of `signals`.
 
     Args:
-        input: A float tensor of time-domain audio signals.
-        nfft: FFT size or frame length.
-        noverlap: Number of overlapping samples or frame step.
+        signals: A float tensor of time-domain audio signals.
+        frame_length: Window frame length in samples (or `nfft`).
+        frame_step: Hop length in samples (or `noverlap` when passed positionally as second arg).
+        fft_length: Size of the FFT to apply (defaults to `frame_length`).
+        window_fn: Optional callable taking `frame_length` and returning a 1D window tensor.
+        pad_end: Whether to pad the end of `signals` with zeros.
+        name: Optional operation name.
         *args: Additional positional arguments.
-        **kwargs: Additional keyword STFT arguments (`frame_length`, `frame_step`, etc.).
+        **kwargs: Additional keyword STFT arguments (`nfft`, `noverlap`).
 
     Returns:
         Tensor: STFT spectrogram tensor.
     """
-    del args, kwargs
-    tensor_in = _ensure_tensor(input)
-    return _wrap_tensor(as_tensor_obj(_ops.stft(tensor_in, nfft, noverlap)))
+    del pad_end, name, args
+    kw_nfft = kwargs.get("nfft")
+    kw_noverlap = kwargs.get("noverlap")
+    eff_frame_len = (
+        int(frame_length)
+        if frame_length is not None
+        else (int(kw_nfft) if isinstance(kw_nfft, int) else 10)
+    )
+    eff_fft_len = int(fft_length) if fft_length is not None else eff_frame_len
+    eff_overlap = (
+        max(0, eff_frame_len - int(frame_step))
+        if frame_step is not None
+        else (int(kw_noverlap) if isinstance(kw_noverlap, int) else 0)
+    )
+
+    if window_fn is not None:
+        _ = window_fn(eff_frame_len)
+    tensor_in = _ensure_tensor(signals)
+    return _wrap_tensor(as_tensor_obj(_ops.stft(tensor_in, eff_fft_len, eff_overlap)))
 
 
 def inverse_stft(
-    input: Tensor | TensorOperand,
-    nfft: int = 10,
-    noverlap: int = 0,
+    stfts: Tensor | TensorOperand,
+    frame_length: int | None = None,
+    frame_step: int | None = None,
+    fft_length: int | None = None,
+    window_fn: Callable[[int], Tensor] | None = None,
+    name: str | None = None,
     *args: TensorOperand,
     **kwargs: TensorOperand,
 ) -> Tensor:
-    """Compute the inverse Short-time Fourier Transform of `input`.
+    """Compute the inverse Short-time Fourier Transform of `stfts`.
 
     Args:
-        input: A complex STFT spectrogram tensor.
-        nfft: FFT length.
-        noverlap: Number of overlapping samples.
+        stfts: A complex STFT spectrogram tensor.
+        frame_length: Window frame length in samples.
+        frame_step: Frame hop step in samples.
+        fft_length: FFT length.
+        window_fn: Optional window generator callable.
+        name: Optional operation name.
         *args: Additional positional arguments.
-        **kwargs: Additional keyword arguments.
+        **kwargs: Additional keyword arguments (`nfft`, `noverlap`).
 
     Returns:
         Tensor: Reconstructed time-domain signal tensor.
     """
-    del args, kwargs
-    tensor_in = _ensure_tensor(input)
-    return _wrap_tensor(as_tensor_obj(_ops.istft(tensor_in, nfft, noverlap)))
+    del name, args
+    kw_nfft = kwargs.get("nfft")
+    kw_noverlap = kwargs.get("noverlap")
+    eff_frame_len = (
+        int(frame_length)
+        if frame_length is not None
+        else (int(kw_nfft) if isinstance(kw_nfft, int) else 10)
+    )
+    eff_fft_len = int(fft_length) if fft_length is not None else eff_frame_len
+    eff_overlap = (
+        max(0, eff_frame_len - int(frame_step))
+        if frame_step is not None
+        else (int(kw_noverlap) if isinstance(kw_noverlap, int) else 0)
+    )
+
+    if window_fn is not None:
+        _ = window_fn(eff_frame_len)
+    tensor_in = _ensure_tensor(stfts)
+    return _wrap_tensor(as_tensor_obj(_ops.istft(tensor_in, eff_fft_len, eff_overlap)))
 
 
-def mfccs_from_log_mel_spectrograms(*args: TensorOperand, **kwargs: TensorOperand) -> Tensor:
-    """Compute MFCCs of `log_mel_spectrograms`.
+def mfccs_from_log_mel_spectrograms(
+    log_mel_spectrograms: Tensor | TensorOperand = None,
+    name: str | None = None,
+) -> Tensor:
+    """Compute MFCCs of `log_mel_spectrograms` using ortho-scaled Type-II DCT.
 
     Args:
-        *args: Positional spectrogram arguments.
-        **kwargs: Keyword arguments.
+        log_mel_spectrograms: A `[..., num_mel_bins]` float tensor of log-magnitude mel spectrograms.
+        name: Optional operation name.
 
     Returns:
-        Tensor: MFCC tensor.
+        Tensor: MFCC tensor of shape `[..., num_mel_bins]`.
 
     Raises:
-        NotImplementedError: Always raised for unimplemented operation.
+        ValueError: If `log_mel_spectrograms` is `None` or scalar.
     """
-    del args, kwargs
-    raise NotImplementedError("Not implemented")
+    del name
+    if log_mel_spectrograms is None:
+        raise ValueError("log_mel_spectrograms must not be None.")
+    t_in = _ensure_tensor(log_mel_spectrograms)
+    if not t_in.shape:
+        raise ValueError("log_mel_spectrograms must have rank >= 1.")
+    n_bins = t_in.shape[-1]
+    scale = 1.0 / math.sqrt(2.0 * float(n_bins))
+    basis_rows: list[list[float]] = []
+    for n in range(n_bins):
+        row: list[float] = []
+        for k in range(n_bins):
+            val = 2.0 * scale * math.cos(math.pi * (float(n) + 0.5) * float(k) / float(n_bins))
+            row.append(val)
+        basis_rows.append(row)
+    basis_tensor = _to_tensor(basis_rows, dtype=t_in.dtype)
+    return _wrap_tensor(as_tensor_obj(_ops.matmul(t_in, basis_tensor)))
 
 
 def hann_window(

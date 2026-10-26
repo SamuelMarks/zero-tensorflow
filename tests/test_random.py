@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from zero_tensorflow import Tensor, random
-
-import numpy as np
+from zero_tensorflow import Tensor, debugging, random
 
 
 def test_random_uniform() -> None:
@@ -12,8 +10,8 @@ def test_random_uniform() -> None:
     res = random.uniform((2, 3), minval=0.0, maxval=1.0, seed=42)
     assert isinstance(res, Tensor)
     assert res.shape == (2, 3)
-    arr = np.asarray(res.numpy())
-    assert np.all(arr >= 0.0) and np.all(arr <= 1.0)
+    vals = debugging._flatten_floats(res)
+    assert all(0.0 <= v <= 1.0 for v in vals)
 
 
 def test_random_normal() -> None:
@@ -45,8 +43,8 @@ def test_random_poisson() -> None:
     res = random.poisson((3, 4), lam=2.5, seed=42)
     assert isinstance(res, Tensor)
     assert res.shape == (3, 4)
-    arr = np.asarray(res.numpy())
-    assert np.all(arr >= 0.0)
+    vals = debugging._flatten_floats(res)
+    assert all(v >= 0.0 for v in vals)
 
 
 def test_random_poisson_fallback() -> None:
@@ -54,7 +52,7 @@ def test_random_poisson_fallback() -> None:
     res_scalar_shape = random.poisson(3, lam=0.0, seed=7)
     assert isinstance(res_scalar_shape, Tensor)
     assert res_scalar_shape.shape == (3,)
-    np.testing.assert_allclose(res_scalar_shape.numpy(), [0.0, 0.0, 0.0])
+    debugging.assert_near(res_scalar_shape, [0.0, 0.0, 0.0])
 
     res_none_shape = random.poisson(None, lam=1.5, seed=7)
     assert isinstance(res_none_shape, Tensor)

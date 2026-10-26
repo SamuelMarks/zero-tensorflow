@@ -9,32 +9,24 @@ on:
 permissions:
   contents: write
 
+env:
+  UV_DYNAMIC_VERSIONING_BYPASS: "2.2.0"
+  PDM_BUILD_SCM_VERSION: "2.2.0"
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
-    - name: Checkout ml-switcheroo-ir
-      uses: actions/checkout@v4
-      with:
-        repository: SamuelMarks/ml-switcheroo-ir
-        path: ../ml-switcheroo-ir
-
-    - name: Checkout ml-switcheroo-compiler
-      uses: actions/checkout@v4
-      with:
-        repository: SamuelMarks/ml-switcheroo-compiler
-        path: ../ml-switcheroo-compiler
-
-    - name: Checkout zero-keras
-      uses: actions/checkout@v4
-      with:
-        repository: SamuelMarks/zero-keras
-        path: ../zero-keras
+    - name: Checkout Ecosystem Sibling Repositories
+      run: |
+        git clone --depth 1 https://github.com/SamuelMarks/ml-switcheroo-ir.git ../ml-switcheroo-ir
+        git clone --depth 1 https://github.com/SamuelMarks/ml-switcheroo-compiler.git ../ml-switcheroo-compiler
+        git clone --depth 1 https://github.com/SamuelMarks/zero-keras.git ../zero-keras
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.11'
 
@@ -42,11 +34,13 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install build pytest pytest-cov ruff mypy interrogate
+        pip install "ml-ecosystem-snapshots @ https://github.com/SamuelMarks/ml-ecosystem-snapshots/releases/download/v0.0.5/ml_ecosystem_snapshots-0.0.5-py3-none-any.whl"
+        mkdir -p ~/.cache/ml_ecosystem_snapshots
+        curl -sL "https://github.com/SamuelMarks/ml-ecosystem-snapshots/releases/download/v0.0.5/tensorflow_v2.21.0.json" -o ~/.cache/ml_ecosystem_snapshots/tensorflow_v2.21.0.json
+        pip install -r requirements-test.txt
         pip install -e ../ml-switcheroo-ir
         pip install -e ../ml-switcheroo-compiler
         pip install -e ../zero-keras
-        pip install "ml-ecosystem-snapshots @ https://github.com/SamuelMarks/ml-ecosystem-snapshots/releases/download/v0.0.4/ml_ecosystem_snapshots-0.0.4-py3-none-any.whl"
-        pip install -r requirements-test.txt
         pip install -e .
 
     - name: Lint and Format Check (Ruff)
@@ -67,7 +61,7 @@ jobs:
       run: python3 scripts/check_api_parity.py
 
     - name: Run Unit Tests and Enforce 100% Coverage
-      run: pytest --cov=src/zero_tensorflow --cov=scripts --cov-branch --cov-report=term-missing --cov-fail-under=100 -m "not reference"
+      run: pytest --cov=src/zero_tensorflow --cov=scripts --cov-branch --cov-report=term-missing --cov-report=json --cov-fail-under=100 -m "not reference"
 
     - name: Run Reference Parity Tests
       run: pytest -m "reference"

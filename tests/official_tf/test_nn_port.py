@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+import zero_tensorflow as tf
 from tests.conftest import TensorFlowTestCase
 from zero_tensorflow import nn as nn_ops
-
-import numpy as np
 
 
 class NNOpsTest(TensorFlowTestCase):
@@ -13,12 +12,14 @@ class NNOpsTest(TensorFlowTestCase):
 
     def testRelu(self) -> None:
         """Verify `nn_ops.relu` on a 2D array with negative and positive values."""
-        x = np.array([[-1.0, 2.0], [3.0, -4.0]])
+        x = tf.Tensor([[-1.0, 2.0], [3.0, -4.0]])
         res = nn_ops.relu(x)
-        self.assertAllClose(res, np.array([[0.0, 2.0], [3.0, 0.0]]))
+        self.assertAllClose(res, [[0.0, 2.0], [3.0, 0.0]])
+        self.assertDifferentialParity(lambda backend: backend.nn.relu(x))
 
     def testSoftmax(self) -> None:
         """Verify `nn_ops.softmax` on uniform 2-class logits."""
-        x = np.array([[1.0, 1.0]])
+        x = tf.Tensor([[1.0, 1.0]])
         res = nn_ops.softmax(x)
-        self.assertAllClose(res, np.array([[0.5, 0.5]]))
+        self.assertAllClose(res, [[0.5, 0.5]])
+        self.assertDifferentialParity(lambda backend: backend.nn.softmax(x))

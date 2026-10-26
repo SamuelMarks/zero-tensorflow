@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import zero_tensorflow as tf
-from zero_tensorflow import GradientTape, Tensor, _to_tensor, to_dtype
+import zero_tensorflow._typing as zt_typing
+from zero_tensorflow import GradientTape, Tensor, _to_tensor, debugging, to_dtype
 from zero_tensorflow.nn import softmax
 
-import numpy as np
 import pytest
 from ml_switcheroo_compiler.core.dtype import DType
+from ml_switcheroo_ir import LogicalNode
 
 
 def test_tensor_numpy_and_comparisons() -> None:
@@ -21,13 +22,13 @@ def test_tensor_numpy_and_comparisons() -> None:
 
     eq = tf.math.equal(t1, t2)
     assert isinstance(t1 == t2, (Tensor, bool))
-    np.testing.assert_array_equal(eq.numpy(), [True, False])
+    debugging.assert_equal(eq, [True, False])
     eq_non = t1 == _NonOperand()
     assert eq_non is False
 
     ne = tf.math.not_equal(t1, t2)
     assert isinstance(t1 != t2, (Tensor, bool))
-    np.testing.assert_array_equal(ne.numpy(), [False, True])
+    debugging.assert_equal(ne, [False, True])
     ne_non = t1 != _NonOperand()
     assert ne_non is True
 
@@ -45,6 +46,90 @@ def test_tensor_numpy_and_comparisons() -> None:
     assert Tensor(1.0).__nonzero__() is True
     with pytest.raises(ValueError, match="ambiguous"):
         bool(t1)
+
+
+def test_tensor_extended_methods_and_operators() -> None:
+    """Verify `ndim`, `size`, `device`, `ref`, slicing, iteration, matmul, div/mod, and bitwise ops."""
+    t_empty = Tensor()
+    assert t_empty.ndim == 0
+    assert t_empty.size == 0
+    assert "CPU:0" in t_empty.device
+    assert t_empty.backing_device == t_empty.device
+    assert t_empty.consumers() == []
+
+    t_mat = Tensor([[1.0, 2.0], [3.0, 4.0]])
+    assert t_mat.ndim == 2
+    assert t_mat.size == 4
+    ref1 = t_mat.ref()
+    ref2 = t_mat.ref()
+    assert ref1 == ref2
+    assert hash(ref1) == hash(ref2)
+    assert ref1.deref() is t_mat
+
+    # Indexing and slicing
+    debugging.assert_near(t_mat[0], [1.0, 2.0])
+    debugging.assert_near(t_mat[0:1, 1], [2.0])
+    assert t_mat[None, 0].shape == (1, 2)
+    t_scalar = Tensor(5.0)
+    assert t_scalar[0].numpy() == 5.0
+
+    # Boolean mask indexing
+    mask_1d = Tensor([True, False], dtype="bool")
+    debugging.assert_near(Tensor([10.0, 20.0])[mask_1d], [10.0])
+    mask_2d = Tensor([[True, False], [False, True]], dtype="bool")
+    debugging.assert_near(t_mat[mask_2d], [1.0, 4.0])
+    assert t_scalar[Tensor(True, dtype="bool")].numpy() == [5.0]
+    assert t_scalar[Tensor(False, dtype="bool")].shape == (0,)
+
+    # Iteration
+    rows = list(t_mat)
+    assert len(rows) == 2
+    debugging.assert_near(rows[0], [1.0, 2.0])
+    t_sym = Tensor(1.0, _traced_node=LogicalNode(id="sym1", op_type="Custom"))
+    with pytest.raises(TypeError, match="Iterating over a symbolic"):
+        list(t_sym)
+
+    # Consumers in active graph
+    with GradientTape() as tape:
+        x_c = Tensor(2.0)
+        tape.watch(x_c)
+        _ = x_c + 1.0
+        assert len(x_c.consumers()) == 1
+        assert t_sym.consumers() == []
+        untracked = Tensor(9.0)
+        assert untracked.consumers() == []
+
+    # Matmul, pow, floordiv, mod
+    debugging.assert_near(t_mat @ t_mat, [[7.0, 10.0], [15.0, 22.0]])
+    debugging.assert_near([[1.0, 0.0], [0.0, 1.0]] @ t_mat, [[1.0, 2.0], [3.0, 4.0]])
+    debugging.assert_near(2.0 ** Tensor([2.0, 3.0]), [4.0, 8.0])
+    debugging.assert_near(Tensor([7.0, 8.0]) // 3.0, [2.0, 2.0])
+    debugging.assert_near(7.0 // Tensor([2.0, 3.0]), [3.0, 2.0])
+    debugging.assert_near(Tensor([7.0, 8.0]) % 3.0, [1.0, 2.0])
+    debugging.assert_near(7.0 % Tensor([2.0, 4.0]), [1.0, 3.0])
+
+    # Bitwise and logical operators on int and bool tensors
+    ti = Tensor([6, 3], dtype="int32")
+    debugging.assert_equal(ti & 2, [2, 2])
+    debugging.assert_equal(2 & ti, [2, 2])
+    debugging.assert_equal(ti | 1, [7, 3])
+    debugging.assert_equal(1 | ti, [7, 3])
+    debugging.assert_equal(ti ^ 1, [7, 2])
+    debugging.assert_equal(1 ^ ti, [7, 2])
+    debugging.assert_equal(~ti, [-7, -4])
+    debugging.assert_equal(ti << 1, [12, 6])
+    debugging.assert_equal(1 << ti, [64, 8])
+    debugging.assert_equal(ti >> 1, [3, 1])
+    debugging.assert_equal(16 >> ti, [0, 2])
+
+    tb = Tensor([True, False], dtype="bool")
+    debugging.assert_equal(tb & True, [True, False])
+    debugging.assert_equal(True & tb, [True, False])
+    debugging.assert_equal(tb | False, [True, False])
+    debugging.assert_equal(False | tb, [True, False])
+    debugging.assert_equal(tb ^ True, [False, True])
+    debugging.assert_equal(True ^ tb, [False, True])
+    debugging.assert_equal(~tb, [False, True])
 
 
 def test_gradient_tape_unwatched_and_errors() -> None:
@@ -85,11 +170,15 @@ def test_softmax_axis() -> None:
     """Verify `nn.softmax` numerical accuracy along default and explicit axes."""
     logits = Tensor([[1.0, 1.0], [0.0, 0.0]])
     probs = softmax(logits, axis=-1)
-    np.testing.assert_allclose(probs.numpy(), [[0.5, 0.5], [0.5, 0.5]])
+    debugging.assert_near(probs, [[0.5, 0.5], [0.5, 0.5]])
 
 
 def test_to_tensor_invalid_dtype() -> None:
     """Verify `to_dtype` mappings for built-in types and `TypeError` on invalid dtypes."""
+
+    class int16:  # noqa: N801
+        """Custom class whose lowercase name matches a DType alias."""
+
     assert to_dtype(None) == DType.Float32
     assert to_dtype(DType.Int64) == DType.Int64
     assert to_dtype("float64") == DType.Float64
@@ -100,7 +189,7 @@ def test_to_tensor_invalid_dtype() -> None:
     assert to_dtype(complex) == DType.Complex64
     assert to_dtype(str) == DType.String
     assert to_dtype(bytes) == DType.String
-    assert to_dtype(np.int16) == DType.Int16
+    assert to_dtype(int16) == DType.Int16
 
     with pytest.raises(TypeError, match="Cannot convert"):
         to_dtype("not_a_valid_dtype")
@@ -110,11 +199,46 @@ def test_to_tensor_invalid_dtype() -> None:
 
 
 def test_compiler_ops_missing_coverage() -> None:
-    """Verify `_to_tensor` and `Variable` edge cases (`read_value`, `name`, `dtype`)."""
-    v = tf.Variable([1.0, 2.0], name="weights", dtype="float32")
+    """Verify `_to_tensor`, `Variable` scatter/read operations, and `_typing` protocols."""
+    v = tf.Variable(
+        [1.0, 2.0, 3.0],
+        name="weights",
+        dtype="float32",
+        synchronization="ON_WRITE",
+        aggregation="SUM",
+    )
     assert v.name == "weights"
     assert v.dtype == DType.Float32
+    assert v.trainable is True
+    v.trainable = False
+    assert v.trainable is False
+    assert v.synchronization == "ON_WRITE"
+    assert v.aggregation == "SUM"
+
     snap = v.read_value()
     assert isinstance(snap, Tensor)
-    np.testing.assert_allclose(snap.numpy(), [1.0, 2.0])
+    debugging.assert_near(snap, [1.0, 2.0, 3.0])
     assert _to_tensor(v) is not None
+
+    snap_assign = v.assign([4.0, 5.0, 6.0], read_value=False)
+    assert not isinstance(snap_assign, tf.Variable)
+    snap_add = v.assign_add([1.0, 1.0, 1.0], read_value=False)
+    debugging.assert_near(snap_add, [5.0, 6.0, 7.0])
+    snap_sub = v.assign_sub([1.0, 1.0, 1.0], read_value=False)
+    debugging.assert_near(snap_sub, [4.0, 5.0, 6.0])
+
+    v.scatter_nd_update([[0], [2]], [10.0, 30.0])
+    debugging.assert_near(v, [10.0, 5.0, 30.0])
+    v.scatter_nd_add([1], [5.0])
+    debugging.assert_near(v, [10.0, 10.0, 30.0])
+    v.scatter_nd_sub(0, 2.0)
+    debugging.assert_near(v, [8.0, 10.0, 30.0])
+    v.batch_scatter_update([1.0, 2.0, 3.0])
+    debugging.assert_near(v, [1.0, 2.0, 3.0])
+    gathered = v.sparse_read([0, 2])
+    debugging.assert_near(gathered, [1.0, 3.0])
+
+    # Exercise runtime-checkable protocols in _typing.py
+    assert isinstance(v, zt_typing.TrackableProtocol)
+    assert isinstance(tf.ragged.RaggedTensor([[1]]), zt_typing.RaggedTensorProtocol)
+    assert isinstance(tf.sparse.from_dense([[1.0]]), zt_typing.SparseTensorProtocol)

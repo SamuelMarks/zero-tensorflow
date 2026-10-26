@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+import struct
+import unicodedata
 from collections.abc import Callable, Sequence
 from typing import Protocol, runtime_checkable
 
@@ -14,7 +17,9 @@ from zero_tensorflow._typing import (
     NumpyConvertibleProtocol,
     ScalarValue,
     TensorOperand,
+    as_operand,
 )
+from zero_tensorflow.core_tensor import Tensor, _wrap, _wrap_tensor
 
 import ml_switcheroo_compiler.core as msc_core
 import ml_switcheroo_compiler.core.dtype as msc_dtype
@@ -54,6 +59,193 @@ __all__ = [
 ]
 
 
+class _StringScalar(str):
+    """String scalar wrapper supporting `.numpy()`, `.shape`, and `.dtype`."""
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Return scalar tensor shape `()`.
+
+        Returns:
+            tuple[int, ...]: Empty shape tuple.
+        """
+        return ()
+
+    @property
+    def dtype(self) -> msc_dtype.DType:
+        """Return string `DType`.
+
+        Returns:
+            msc_dtype.DType: `DType.String`.
+        """
+        return msc_dtype.DType.String
+
+    def numpy(self) -> str:
+        """Return the underlying Python string value.
+
+        Returns:
+            str: Underlying string value.
+        """
+        return str(self)
+
+
+class _IntScalar(int):
+    """Integer scalar wrapper supporting `.numpy()`, `.shape`, and `.dtype`."""
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Return scalar tensor shape `()`.
+
+        Returns:
+            tuple[int, ...]: Empty shape tuple.
+        """
+        return ()
+
+    @property
+    def dtype(self) -> msc_dtype.DType:
+        """Return integer `DType`.
+
+        Returns:
+            msc_dtype.DType: `DType.Int64`.
+        """
+        return msc_dtype.DType.Int64
+
+    def numpy(self) -> int:
+        """Return the underlying Python integer value.
+
+        Returns:
+            int: Underlying integer value.
+        """
+        return int(self)
+
+
+class _FloatScalar(float):
+    """Floating-point scalar wrapper supporting `.numpy()`, `.shape`, and `.dtype`."""
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Return scalar tensor shape `()`.
+
+        Returns:
+            tuple[int, ...]: Empty shape tuple.
+        """
+        return ()
+
+    @property
+    def dtype(self) -> msc_dtype.DType:
+        """Return float32 `DType`.
+
+        Returns:
+            msc_dtype.DType: `DType.Float32`.
+        """
+        return msc_dtype.DType.Float32
+
+    def numpy(self) -> float:
+        """Return the underlying Python float value.
+
+        Returns:
+            float: Underlying float value.
+        """
+        return float(self)
+
+
+class _BoolScalar(int):
+    """Boolean scalar wrapper supporting `.numpy()`, `.shape`, and `.dtype`."""
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Return scalar tensor shape `()`.
+
+        Returns:
+            tuple[int, ...]: Empty shape tuple.
+        """
+        return ()
+
+    @property
+    def dtype(self) -> msc_dtype.DType:
+        """Return boolean `DType`.
+
+        Returns:
+            msc_dtype.DType: `DType.Bool`.
+        """
+        return msc_dtype.DType.Bool
+
+    def numpy(self) -> bool:
+        """Return the underlying Python boolean value.
+
+        Returns:
+            bool: Underlying boolean value.
+        """
+        return bool(self)
+
+
+class _TensorList(list[TensorOrScalar]):
+    """Nested list tensor wrapper supporting `.numpy()`, `.shape`, and `.dtype`."""
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Infer rectangular shape dimensions of the nested list.
+
+        Returns:
+            tuple[int, ...]: Shape dimensions.
+        """
+        dims: list[int] = [len(self)]
+        cur: Sequence[TensorOrScalar] = self
+        while cur and isinstance(cur[0], list):
+            dims.append(len(cur[0]))
+            cur = cur[0]
+        return tuple(dims)
+
+    @property
+    def dtype(self) -> msc_dtype.DType:
+        """Return inferred element `DType`.
+
+        Returns:
+            msc_dtype.DType: Inferred data type.
+        """
+        if self and isinstance(self[0], bool):
+            return msc_dtype.DType.Bool
+        if self and isinstance(self[0], int):
+            return msc_dtype.DType.Int64
+        if self and isinstance(self[0], float):
+            return msc_dtype.DType.Float32
+        return msc_dtype.DType.String
+
+    def numpy(self) -> list[TensorOrScalar]:
+        """Return a plain Python list copy.
+
+        Returns:
+            list[TensorOrScalar]: Plain list copy.
+        """
+        return list(self)
+
+
+def _wrap_eager_output(val: TensorOrScalar) -> Tensor | TensorOrScalar:
+    """Wrap an eager Python scalar, list, or compiler tensor with `.numpy()` support.
+
+    Args:
+        val: Raw eager result value.
+
+    Returns:
+        Tensor | TensorOrScalar: Wrapped tensor or `.numpy()`-capable scalar/list.
+    """
+    if isinstance(val, Tensor):
+        return val
+    if isinstance(val, msc_core.Tensor):
+        return _wrap_tensor(val)
+    if isinstance(val, bool):
+        return _BoolScalar(1 if val else 0)
+    if isinstance(val, str):
+        return _StringScalar(val)
+    if isinstance(val, int):
+        return _IntScalar(val)
+    if isinstance(val, float):
+        return _FloatScalar(val)
+    if isinstance(val, list):
+        return _TensorList([_wrap_eager_output(item) for item in val])
+    return val
+
+
 @runtime_checkable
 class _ShapedTypedProtocol(Protocol):
     """Protocol for tensor-like objects declaring `.shape` and `.dtype` attributes."""
@@ -84,7 +276,9 @@ def _is_tracing(val: TensorOperand | _ShapedTypedProtocol) -> bool:
     Returns:
         bool: True when tracing a symbolic string operation.
     """
-    if isinstance(val, (ProxyTensor, _ShapedTypedProtocol)):
+    if isinstance(val, (ProxyTensor, _ShapedTypedProtocol)) and not isinstance(
+        val, (_StringScalar, _IntScalar, _FloatScalar, _BoolScalar, _TensorList)
+    ):
         return _tracer.is_tracing or not config.eager_mode
     return False
 
@@ -115,6 +309,10 @@ def _to_python(
         NestedTensorData: Python scalar or nested sequence.
     """
     current: TensorOperand | TensorOrScalar | NestedTensorData | _ShapedTypedProtocol = val
+    if isinstance(current, (_StringScalar, _IntScalar, _FloatScalar, _BoolScalar)):
+        return current.numpy()
+    if isinstance(current, _TensorList):
+        return [_to_python(item) for item in list(current)]
     if isinstance(current, NumpyConvertibleProtocol):
         current = current.numpy()
     if isinstance(current, ArrayLikeProtocol):
@@ -159,11 +357,67 @@ def _reduce_join_nested(val: NestedTensorData, sep: str = "") -> str:
     return str(val)
 
 
+def _nested_rank(val: NestedTensorData) -> int:
+    """Compute the nesting depth (rank) of `val`.
+
+    Args:
+        val: Nested list or scalar.
+
+    Returns:
+        int: Rank of `val`.
+    """
+    rank = 0
+    cur = val
+    while isinstance(cur, (list, tuple)):
+        rank += 1
+        if not cur:
+            break
+        cur = cur[0]
+    return rank
+
+
+def _reduce_join_single_axis(
+    val: NestedTensorData,
+    axis: int,
+    keepdims: bool,
+    sep: str,
+) -> NestedTensorData:
+    """Reduce-join `val` along non-negative dimension `axis`.
+
+    Args:
+        val: Nested list of strings.
+        axis: Non-negative dimension index to reduce.
+        keepdims: Whether to keep the reduced dimension of size 1.
+        sep: Separator string.
+
+    Returns:
+        NestedTensorData: Reduced nested string data.
+    """
+    if not isinstance(val, (list, tuple)):
+        return str(val)
+    if axis == 0:
+        if not val:
+            return [""] if keepdims else ""
+        if isinstance(val[0], (list, tuple)):
+            num_cols = len(val[0])
+            transposed: list[NestedTensorData] = [
+                [row[c] for row in val if isinstance(row, (list, tuple)) and c < len(row)]
+                for c in range(num_cols)
+            ]
+            joined_cols: list[NestedTensorData] = [
+                _reduce_join_single_axis(col, 0, False, sep) for col in transposed
+            ]
+            return [joined_cols] if keepdims else joined_cols
+        joined = sep.join(str(item) for item in val)
+        return [joined] if keepdims else joined
+    return [_reduce_join_single_axis(sub, axis - 1, keepdims, sep) for sub in val]
+
+
 def join(
     inputs: Sequence[TensorOperand | _ShapedTypedProtocol],
     separator: str = "",
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Perform element-wise concatenation of a list of string tensors.
 
     Args:
@@ -172,18 +426,18 @@ def join(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Joined string or list of strings.
+        Tensor | TensorOrScalar: Joined string or list of strings.
     """
     del name
     if not inputs:
-        return ""
+        return _wrap_eager_output("")
     if any(_is_tracing(x) for x in inputs):
         t_inputs = [_as_str_tensor(x) for x in inputs]
-        return _ops.text.string_join(t_inputs, separator=separator)
+        return _wrap_tensor(as_tensor_obj(_ops.text.string_join(t_inputs, separator=separator)))
     py_inputs = [_to_python(x) for x in inputs]
     is_list = any(isinstance(x, list) for x in py_inputs)
     if not is_list:
-        return separator.join(str(x) for x in py_inputs)
+        return _wrap_eager_output(separator.join(str(x) for x in py_inputs))
     max_len = max((len(x) for x in py_inputs if isinstance(x, list)), default=0)
     res: list[str] = []
     for i in range(max_len):
@@ -194,7 +448,7 @@ def join(
             else:
                 parts.append(str(inp))
         res.append(separator.join(parts))
-    return res
+    return _wrap_eager_output(res)
 
 
 def split(
@@ -202,7 +456,7 @@ def split(
     sep: str | None = None,
     maxsplit: int = -1,
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Split elements of `input` based on `sep` into a list/tensor of substrings.
 
     Args:
@@ -212,22 +466,26 @@ def split(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Split substrings.
+        Tensor | TensorOrScalar: Split substrings.
     """
     del name
     if _is_tracing(input):
-        return _ops.text.string_split(
-            _as_str_tensor(input), delimiter=sep if sep is not None else " "
+        return _wrap(
+            as_operand(
+                _ops.text.string_split(
+                    _as_str_tensor(input), delimiter=sep if sep is not None else " "
+                )
+            )
         )
     val = _to_python(input)
-    return _map_nested(lambda x: str(x).split(sep, maxsplit), val)
+    return _wrap_eager_output(_map_nested(lambda x: str(x).split(sep, maxsplit), val))
 
 
 def length(
     input: TensorOperand | _ShapedTypedProtocol,
     unit: str = "BYTE",
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Compute the length of each string given in the input tensor.
 
     Args:
@@ -236,20 +494,26 @@ def length(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Integer length(s) of each string.
+        Tensor | TensorOrScalar: Integer length(s) of each string.
     """
     del name
     if _is_tracing(input):
-        return _ops.text.string_length(_as_str_tensor(input))
+        return _wrap_tensor(as_tensor_obj(_ops.text.string_length(_as_str_tensor(input))))
     val = _to_python(input)
     if unit.upper() == "UTF8_CHAR":
-        return _map_nested(
-            lambda x: len(x.decode("utf-8", errors="replace") if isinstance(x, bytes) else str(x)),
+        return _wrap_eager_output(
+            _map_nested(
+                lambda x: len(
+                    x.decode("utf-8", errors="replace") if isinstance(x, bytes) else str(x)
+                ),
+                val,
+            )
+        )
+    return _wrap_eager_output(
+        _map_nested(
+            lambda x: len(x if isinstance(x, bytes) else str(x).encode("utf-8")),
             val,
         )
-    return _map_nested(
-        lambda x: len(x if isinstance(x, bytes) else str(x).encode("utf-8")),
-        val,
     )
 
 
@@ -259,7 +523,7 @@ def regex_replace(
     rewrite: str,
     replace_global: bool = True,
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Replace elements of `input` matching regex `pattern` with `rewrite`.
 
     Args:
@@ -270,22 +534,26 @@ def regex_replace(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: String(s) with regex matches replaced.
+        Tensor | TensorOrScalar: String(s) with regex matches replaced.
     """
     del name
     if _is_tracing(input):
-        return _ops.text.regex_replace(_as_str_tensor(input), pattern, rewrite)
+        return _wrap_tensor(
+            as_tensor_obj(_ops.text.regex_replace(_as_str_tensor(input), pattern, rewrite))
+        )
     compiled = re.compile(pattern)
     count = 0 if replace_global else 1
     val = _to_python(input)
-    return _map_nested(lambda x: compiled.sub(rewrite, str(x), count=count), val)
+    return _wrap_eager_output(
+        _map_nested(lambda x: compiled.sub(rewrite, str(x), count=count), val)
+    )
 
 
 def regex_full_match(
     input: TensorOperand | _ShapedTypedProtocol,
     pattern: str,
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Check if the input matches the regular expression `pattern`.
 
     Args:
@@ -294,14 +562,16 @@ def regex_full_match(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Boolean match result(s).
+        Tensor | TensorOrScalar: Boolean match result(s).
     """
     del name
     if _is_tracing(input):
-        return _ops.text.regex_full_match(_as_str_tensor(input), pattern)
+        return _wrap_tensor(
+            as_tensor_obj(_ops.text.regex_full_match(_as_str_tensor(input), pattern))
+        )
     compiled = re.compile(pattern)
     val = _to_python(input)
-    return _map_nested(lambda x: compiled.fullmatch(str(x)) is not None, val)
+    return _wrap_eager_output(_map_nested(lambda x: compiled.fullmatch(str(x)) is not None, val))
 
 
 def _is_int_dtype(out_type: DTypeLike) -> bool:
@@ -326,7 +596,7 @@ def to_number(
     input: TensorOperand | _ShapedTypedProtocol,
     out_type: DTypeLike = None,
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Convert each string in the input Tensor to the specified numeric type.
 
     Args:
@@ -335,22 +605,24 @@ def to_number(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Parsed numeric value(s).
+        Tensor | TensorOrScalar: Parsed numeric value(s).
     """
     del name
     if _is_tracing(input):
         dt = out_type if isinstance(out_type, msc_dtype.DType) else msc_dtype.DType.Float32
-        return _ops.text.string_to_number(_as_str_tensor(input), dtype=dt)
+        return _wrap_tensor(
+            as_tensor_obj(_ops.text.string_to_number(_as_str_tensor(input), dtype=dt))
+        )
     val = _to_python(input)
     if _is_int_dtype(out_type):
-        return _map_nested(lambda x: int(float(str(x))), val)
-    return _map_nested(lambda x: float(str(x)), val)
+        return _wrap_eager_output(_map_nested(lambda x: int(float(str(x))), val))
+    return _wrap_eager_output(_map_nested(lambda x: float(str(x)), val))
 
 
 def bytes_split(
     input: TensorOperand | _ShapedTypedProtocol,
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Split string elements of `input` into individual bytes/characters.
 
     Args:
@@ -358,13 +630,13 @@ def bytes_split(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Split byte/character list(s).
+        Tensor | TensorOrScalar: Split byte/character list(s).
     """
     del name
     if _is_tracing(input):
-        return _ops.text.string_split(_as_str_tensor(input), delimiter="")
+        return _wrap(as_operand(_ops.text.string_split(_as_str_tensor(input), delimiter="")))
     val = _to_python(input)
-    return _map_nested(lambda x: list(str(x)), val)
+    return _wrap_eager_output(_map_nested(lambda x: list(str(x)), val))
 
 
 def format(
@@ -373,7 +645,7 @@ def format(
     placeholder: str = "{}",
     summarize: int = 3,
     name: str | None = None,
-) -> str:
+) -> _StringScalar:
     """Format a string template using a list of tensors.
 
     Args:
@@ -384,21 +656,21 @@ def format(
         name: Optional name for the operation.
 
     Returns:
-        str: Formatted string.
+        _StringScalar: Formatted string.
     """
     del summarize, name
     py_inputs = [_to_python(x) for x in inputs]
     s = template
     for item in py_inputs:
         s = s.replace(placeholder, str(item), 1)
-    return s
+    return _StringScalar(s)
 
 
 def lower(
     input: TensorOperand | _ShapedTypedProtocol,
     encoding: str = "utf-8",
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Convert all uppercase characters into their respective lowercase replacements.
 
     Args:
@@ -407,13 +679,13 @@ def lower(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Lowercase string(s).
+        Tensor | TensorOrScalar: Lowercase string(s).
     """
     del encoding, name
     if _is_tracing(input):
-        return _ops.text.string_lower(_as_str_tensor(input))
+        return _wrap_tensor(as_tensor_obj(_ops.text.string_lower(_as_str_tensor(input))))
     val = _to_python(input)
-    return _map_nested(lambda x: str(x).lower(), val)
+    return _wrap_eager_output(_map_nested(lambda x: str(x).lower(), val))
 
 
 def ngrams(
@@ -485,7 +757,7 @@ def reduce_join(
     keepdims: bool = False,
     separator: str = "",
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Join all strings in the given tensor along the given axis.
 
     Args:
@@ -496,22 +768,44 @@ def reduce_join(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Joined string result.
+        Tensor | TensorOrScalar: Joined string result.
     """
-    del axis, keepdims, name
+    del name
     if _is_tracing(inputs):
-        return _ops.text.string_join(
-            [_as_str_tensor(inputs)],
-            separator=separator,
+        return _wrap_tensor(
+            as_tensor_obj(
+                _ops.text.string_join(
+                    [_as_str_tensor(inputs)],
+                    separator=separator,
+                )
+            )
         )
     val = _to_python(inputs)
-    return _reduce_join_nested(val, sep=separator)
+    rank = _nested_rank(val)
+    if axis is None:
+        flat_joined = _reduce_join_nested(val, sep=separator)
+        if not keepdims or rank == 0:
+            return _wrap_eager_output(flat_joined)
+        wrapped: NestedTensorData = flat_joined
+        for _ in range(rank):
+            wrapped = [wrapped]
+        return _wrap_eager_output(wrapped)
+
+    axes_raw: list[int] = [int(a) for a in axis] if isinstance(axis, Sequence) else [int(axis)]
+    norm_axes = sorted(
+        {a + rank if a < 0 else a for a in axes_raw if 0 <= (a + rank if a < 0 else a) < rank},
+        reverse=True,
+    )
+    cur = val
+    for ax in norm_axes:
+        cur = _reduce_join_single_axis(cur, ax, keepdims, separator)
+    return _wrap_eager_output(cur)
 
 
 def strip(
     input: TensorOperand | _ShapedTypedProtocol,
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Strip leading and trailing whitespace from `input`.
 
     Args:
@@ -519,13 +813,15 @@ def strip(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Stripped string(s).
+        Tensor | TensorOrScalar: Stripped string(s).
     """
     del name
     if _is_tracing(input):
-        return _ops.text.regex_replace(_as_str_tensor(input), r"^\s+|\s+$", "")
+        return _wrap_tensor(
+            as_tensor_obj(_ops.text.regex_replace(_as_str_tensor(input), r"^\s+|\s+$", ""))
+        )
     val = _to_python(input)
-    return _map_nested(lambda x: str(x).strip(), val)
+    return _wrap_eager_output(_map_nested(lambda x: str(x).strip(), val))
 
 
 def substr(
@@ -534,7 +830,7 @@ def substr(
     len: int,
     unit: str = "BYTE",
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Return substrings from `input` starting at `pos` with length `len`.
 
     Args:
@@ -545,11 +841,11 @@ def substr(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Extracted substring(s).
+        Tensor | TensorOrScalar: Extracted substring(s).
     """
     del unit, name
     if _is_tracing(input):
-        return _ops.text.string_substr(_as_str_tensor(input), pos, len)
+        return _wrap_tensor(as_tensor_obj(_ops.text.string_substr(_as_str_tensor(input), pos, len)))
     val = _to_python(input)
 
     def _sub(x: ScalarValue) -> str:
@@ -564,14 +860,31 @@ def substr(
         s = str(x)
         return s[pos : (pos + len)]
 
-    return _map_nested(_sub, val)
+    return _wrap_eager_output(_map_nested(_sub, val))
+
+
+def _deterministic_hash64(text: str, k0: int = 0, k1: int = 0) -> int:
+    """Compute a deterministic 64-bit unsigned integer hash using `sha256` and 128-bit key `(k0, k1)`.
+
+    Args:
+        text: Input string to hash.
+        k0: First 64-bit unsigned key component.
+        k1: Second 64-bit unsigned key component.
+
+    Returns:
+        int: Non-negative 64-bit hash digest integer.
+    """
+    key_bytes = struct.pack("<QQ", k0 & 0xFFFFFFFFFFFFFFFF, k1 & 0xFFFFFFFFFFFFFFFF)
+    digest = hashlib.sha256(key_bytes + text.encode("utf-8", errors="replace")).digest()
+    val: int = struct.unpack("<Q", digest[:8])[0]
+    return val
 
 
 def to_hash_bucket(
     input: TensorOperand | _ShapedTypedProtocol,
     num_buckets: int,
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Convert each string in the input Tensor to its hash mod by `num_buckets`.
 
     Args:
@@ -580,20 +893,24 @@ def to_hash_bucket(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Hash bucket index or indices in `[0, num_buckets)`.
+        Tensor | TensorOrScalar: Hash bucket index or indices in `[0, num_buckets)`.
     """
     del name
     if _is_tracing(input):
-        return _ops.text.string_to_hash(_as_str_tensor(input), num_buckets=num_buckets)
+        return _wrap_tensor(
+            as_tensor_obj(_ops.text.string_to_hash(_as_str_tensor(input), num_buckets=num_buckets))
+        )
     val = _to_python(input)
-    return _map_nested(lambda x: hash(str(x)) % num_buckets, val)
+    return _wrap_eager_output(
+        _map_nested(lambda x: _deterministic_hash64(str(x)) % num_buckets, val)
+    )
 
 
 def to_hash_bucket_fast(
     input: TensorOperand | _ShapedTypedProtocol,
     num_buckets: int,
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Convert each string in the input Tensor to its fast hash mod by `num_buckets`.
 
     Args:
@@ -602,7 +919,7 @@ def to_hash_bucket_fast(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Hash bucket index or indices.
+        Tensor | TensorOrScalar: Hash bucket index or indices.
     """
     return to_hash_bucket(input, num_buckets, name)
 
@@ -612,7 +929,7 @@ def to_hash_bucket_strong(
     num_buckets: int,
     key: Sequence[int],
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Convert each string in the input Tensor to its keyed hash mod by `num_buckets`.
 
     Args:
@@ -622,10 +939,23 @@ def to_hash_bucket_strong(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Hash bucket index or indices.
+        Tensor | TensorOrScalar: Hash bucket index or indices.
+
+    Raises:
+        ValueError: If `key` does not contain 2 elements.
     """
-    del key
-    return to_hash_bucket(input, num_buckets, name)
+    del name
+    if len(key) != 2:
+        raise ValueError("key must have exactly 2 elements.")
+    k0, k1 = int(key[0]), int(key[1])
+    if _is_tracing(input):
+        return _wrap_tensor(
+            as_tensor_obj(_ops.text.string_to_hash(_as_str_tensor(input), num_buckets=num_buckets))
+        )
+    val = _to_python(input)
+    return _wrap_eager_output(
+        _map_nested(lambda x: _deterministic_hash64(str(x), k0, k1) % num_buckets, val)
+    )
 
 
 def _decode_text_scalar(
@@ -742,6 +1072,58 @@ def unicode_encode(
     return []
 
 
+_SCRIPT_NAME_TO_CODE: dict[str, int] = {
+    "ARABIC": 2,
+    "ARMENIAN": 3,
+    "BENGALI": 4,
+    "BOPOMOFO": 5,
+    "BRAILLE": 6,
+    "CYRILLIC": 8,
+    "DEVANAGARI": 10,
+    "GEORGIAN": 12,
+    "GREEK": 14,
+    "GUJARATI": 15,
+    "GURMUKHI": 16,
+    "CJK": 17,
+    "IDEOGRAPH": 17,
+    "HANGUL": 18,
+    "HEBREW": 19,
+    "HIRAGANA": 20,
+    "KANNADA": 21,
+    "KATAKANA": 22,
+    "LATIN": 25,
+    "MALAYALAM": 26,
+    "TAMIL": 35,
+    "TELUGU": 36,
+    "THAI": 38,
+    "TIBETAN": 39,
+}
+
+
+def _codepoint_to_uscript(cp: int) -> int:
+    """Lookup the ICU `UScriptCode` integer for a single Unicode codepoint `cp`.
+
+    Args:
+        cp: Integer Unicode codepoint.
+
+    Returns:
+        int: ICU `UScriptCode` (`-1` for invalid codepoint, `0` for Common, `25` for Latin, etc.).
+    """
+    if cp < 0 or cp > 0x10FFFF:
+        return -1
+    ch = chr(cp)
+    cat = unicodedata.category(ch)
+    if cat in ("Mn", "Me"):
+        return 1
+    uname = unicodedata.name(ch, "")
+    if not uname:
+        return 0
+    for token in uname.split():
+        if token in _SCRIPT_NAME_TO_CODE:
+            return _SCRIPT_NAME_TO_CODE[token]
+    return 0
+
+
 def unicode_script(
     input: TensorOperand | _ShapedTypedProtocol,
     name: str | None = None,
@@ -749,7 +1131,7 @@ def unicode_script(
     """Determine the UScriptCode for a given tensor of Unicode integer code points.
 
     Args:
-        input: Tensor of `int32` Unicode code points.
+        input: Tensor or sequence of `int32` Unicode code points.
         name: Optional name for the operation.
 
     Returns:
@@ -758,7 +1140,15 @@ def unicode_script(
     del name
     py_val = _to_python(input)
     if isinstance(py_val, list):
-        return [0 for _ in py_val]
+        out: list[int] = []
+        for item in py_val:
+            if isinstance(item, int) and not isinstance(item, bool):
+                out.append(_codepoint_to_uscript(item))
+            elif isinstance(item, str) and len(item) == 1:
+                out.append(_codepoint_to_uscript(ord(item)))
+            else:
+                out.append(-1)
+        return out
     return []
 
 
@@ -884,7 +1274,7 @@ def upper(
     input: TensorOperand | _ShapedTypedProtocol,
     encoding: str = "utf-8",
     name: str | None = None,
-) -> TensorOrScalar:
+) -> Tensor | TensorOrScalar:
     """Convert all lowercase characters into their respective uppercase replacements.
 
     Args:
@@ -893,10 +1283,10 @@ def upper(
         name: Optional name for the operation.
 
     Returns:
-        TensorOrScalar: Uppercase string(s).
+        Tensor | TensorOrScalar: Uppercase string(s).
     """
     del encoding, name
     if _is_tracing(input):
-        return _ops.text.string_upper(_as_str_tensor(input))
+        return _wrap_tensor(as_tensor_obj(_ops.text.string_upper(_as_str_tensor(input))))
     val = _to_python(input)
-    return _map_nested(lambda x: str(x).upper(), val)
+    return _wrap_eager_output(_map_nested(lambda x: str(x).upper(), val))

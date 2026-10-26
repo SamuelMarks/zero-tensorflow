@@ -10,6 +10,7 @@ import ml_switcheroo_compiler.core.dtype as msc_dtype
 from ml_switcheroo_compiler.core.shape import TensorOrScalar
 from ml_switcheroo_compiler.interpreter.evaluator import EvalValue
 from ml_switcheroo_compiler.tracing.tracer import ProxyTensor
+from ml_switcheroo_ir import LogicalNode
 from typing_extensions import TypeAlias
 
 ScalarNumeric: TypeAlias = "int | float | bool | complex"
@@ -133,6 +134,107 @@ class CallableOperandProtocol(Protocol):
         """
 
 
+@runtime_checkable
+class TensorSpecProtocol(Protocol):
+    """Structural protocol for `TensorSpec` and `TypeSpec` descriptors."""
+
+    @property
+    def shape(self) -> ShapeTuple:
+        """Return expected tensor shape tuple.
+
+        Returns:
+            ShapeTuple: Dimension tuple.
+        """
+
+    @property
+    def dtype(self) -> msc_dtype.DType:
+        """Return expected tensor data type.
+
+        Returns:
+            msc_dtype.DType: Expected `DType`.
+        """
+
+    def is_compatible_with(self, spec_or_tensor: TensorOperand) -> bool:
+        """Check whether `spec_or_tensor` is compatible with this specification.
+
+        Args:
+            spec_or_tensor: Candidate spec or tensor.
+
+        Returns:
+            bool: `True` if compatible.
+        """
+
+
+@runtime_checkable
+class RaggedTensorProtocol(Protocol):
+    """Structural protocol for `RaggedTensor` objects."""
+
+    @property
+    def flat_values(self) -> TensorOperand:
+        """Return flattened innermost values.
+
+        Returns:
+            TensorOperand: Flat values.
+        """
+
+    @property
+    def row_splits(self) -> tuple[int, ...]:
+        """Return outermost row split offsets.
+
+        Returns:
+            tuple[int, ...]: Row split offsets.
+        """
+
+
+@runtime_checkable
+class SparseTensorProtocol(Protocol):
+    """Structural protocol for `SparseTensor` objects."""
+
+    @property
+    def indices(self) -> TensorOperand:
+        """Return non-zero coordinate indices.
+
+        Returns:
+            TensorOperand: Coordinate indices.
+        """
+
+    @property
+    def values(self) -> TensorOperand:
+        """Return non-zero values vector.
+
+        Returns:
+            TensorOperand: Non-zero values.
+        """
+
+    @property
+    def dense_shape(self) -> TensorOperand:
+        """Return full dense tensor shape.
+
+        Returns:
+            TensorOperand: Dense shape.
+        """
+
+
+@runtime_checkable
+class TrackableProtocol(Protocol):
+    """Structural protocol for checkpoint-trackable objects."""
+
+    @property
+    def name(self) -> str:
+        """Return trackable resource identifier.
+
+        Returns:
+            str: Resource name.
+        """
+
+
+EagerTensorOperand: TypeAlias = (
+    "msc_core.Tensor | ArrayLikeProtocol | NumpyConvertibleProtocol "
+    "| ScalarValue | Sequence[EagerTensorOperand]"
+)
+
+SymbolicTensorOperand: TypeAlias = "ProxyTensor | LogicalNode"
+
 TensorLike: TypeAlias = (
     "msc_core.Tensor | ProxyTensor | ArrayLikeProtocol | NumpyConvertibleProtocol "
     "| ValuesHolderProtocol | AssignableProtocol | ScalarNumeric | Sequence[TensorLike]"
@@ -144,12 +246,13 @@ StringTensorLike: TypeAlias = (
 )
 
 TrackableLike: TypeAlias = (
-    "AssignableProtocol | TrackableContainerProtocol | NumpyConvertibleProtocol"
+    "AssignableProtocol | TrackableContainerProtocol | TrackableProtocol | NumpyConvertibleProtocol"
 )
 
 TensorOperand: TypeAlias = (
     "msc_core.Tensor | ProxyTensor | ArrayLikeProtocol | NumpyConvertibleProtocol "
-    "| ValuesHolderProtocol | AssignableProtocol | ScalarValue "
+    "| ValuesHolderProtocol | AssignableProtocol | TensorSpecProtocol "
+    "| RaggedTensorProtocol | SparseTensorProtocol | ScalarValue "
     "| Sequence[TensorOperand] | Mapping[str, TensorOperand] | Iterable[TensorOperand]"
 )
 
@@ -178,6 +281,9 @@ def as_operand(val: TensorOrScalar | EvalValue | TensorOperand) -> TensorOperand
                 NumpyConvertibleProtocol,
                 ValuesHolderProtocol,
                 AssignableProtocol,
+                TensorSpecProtocol,
+                RaggedTensorProtocol,
+                SparseTensorProtocol,
                 int,
                 float,
                 bool,
@@ -200,18 +306,24 @@ __all__ = [
     "AxisLike",
     "CallableOperandProtocol",
     "DTypeLike",
+    "EagerTensorOperand",
     "IntTuple",
     "NestedTensorData",
     "NumpyConvertibleProtocol",
+    "RaggedTensorProtocol",
     "ScalarNumeric",
     "ScalarValue",
     "ShapeLike",
     "ShapeTuple",
+    "SparseTensorProtocol",
     "StringTensorLike",
+    "SymbolicTensorOperand",
     "TensorLike",
     "TensorOperand",
+    "TensorSpecProtocol",
     "TrackableContainerProtocol",
     "TrackableLike",
+    "TrackableProtocol",
     "TwoTensorTuple",
     "ValuesHolderProtocol",
     "as_operand",

@@ -2,137 +2,122 @@
 
 from __future__ import annotations
 
+import builtins
+from collections.abc import Sequence
+
 from zero_tensorflow._typing import TensorOperand
 
 __all__ = ["experimental"]
 
 
-class experimental:
-    """Experimental function and tensor typing protocols."""
+class _BaseTraceType:
+    """Base implementation for TensorFlow `TraceType` hierarchy."""
 
-    class AtomicFunction:
-        """Represents a traced atomic graph function."""
+    def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
+        """Initialize trace type descriptor.
 
-        def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
-            """Initialize `AtomicFunction`.
+        Args:
+            *args: Positional trace type arguments.
+            **kwargs: Keyword trace type arguments.
+        """
+        self.args = args
+        self.kwargs = kwargs
 
-            Args:
-                *args: Positional arguments.
-                **kwargs: Keyword arguments.
-            """
-            self.args = args
-            self.kwargs = kwargs
+    def is_subtype_of(self, other: builtins.object) -> bool:
+        """Return whether `self` is a subtype of `other`.
 
-    class Callable:
-        """Base type for TensorFlow callables."""
+        Args:
+            other: Target trace type to check against.
 
-        def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
-            """Initialize `Callable`.
+        Returns:
+            bool: `True` when `self` is an instance of `type(other)` and matches args.
+        """
+        if not isinstance(other, _BaseTraceType):
+            return False
+        if not isinstance(self, type(other)):
+            return False
+        return not (other.args and self.args != other.args)
 
-            Args:
-                *args: Positional arguments.
-                **kwargs: Keyword arguments.
-            """
-            self.args = args
-            self.kwargs = kwargs
+    def most_specific_common_supertype(
+        self,
+        others: Sequence[_BaseTraceType],
+    ) -> _BaseTraceType | None:
+        """Return the most specific common supertype of `self` and `others`.
 
-    class ConcreteFunction:
-        """Base type for specialized monomorphic graph functions."""
+        Args:
+            others: Sequence of other trace types.
 
-        def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
-            """Initialize `ConcreteFunction`.
+        Returns:
+            _BaseTraceType | None: Common supertype if compatible, else `None`.
+        """
+        if all(other.is_subtype_of(self) for other in others):
+            return self
+        return _BaseTraceType()
 
-            Args:
-                *args: Positional arguments.
-                **kwargs: Keyword arguments.
-            """
-            self.args = args
-            self.kwargs = kwargs
 
-    class FunctionType:
-        """Represents the type signature of a TensorFlow function."""
+class _DistributedNamespace:
+    """Distributed tensor type namespace (`tf.types.experimental.distributed`)."""
 
-        def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
-            """Initialize `FunctionType`.
+    class _PerReplica(_BaseTraceType):
+        """Per-replica distributed value trace type."""
 
-            Args:
-                *args: Positional arguments.
-                **kwargs: Keyword arguments.
-            """
-            self.args = args
-            self.kwargs = kwargs
+    class _Mirrored(_BaseTraceType):
+        """Mirrored distributed value trace type."""
 
-    class GenericFunction:
-        """Base type for polymorphic TensorFlow functions."""
-
-        def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
-            """Initialize `GenericFunction`.
-
-            Args:
-                *args: Positional arguments.
-                **kwargs: Keyword arguments.
-            """
-            self.args = args
-            self.kwargs = kwargs
-
-    class PolymorphicFunction:
-        """Deprecated alias for `GenericFunction`."""
-
-        def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
-            """Initialize `PolymorphicFunction`.
-
-            Args:
-                *args: Positional arguments.
-                **kwargs: Keyword arguments.
-            """
-            self.args = args
-            self.kwargs = kwargs
-
-    class SupportsTracingProtocol:
-        """Protocol for objects that can be traced into a `TraceType`."""
-
-        def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
-            """Initialize `SupportsTracingProtocol`.
-
-            Args:
-                *args: Positional arguments.
-                **kwargs: Keyword arguments.
-            """
-            self.args = args
-            self.kwargs = kwargs
-
-    class TensorLike:
-        """Base type for objects convertible to `Tensor`."""
-
-        def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
-            """Initialize `TensorLike`.
-
-            Args:
-                *args: Positional arguments.
-                **kwargs: Keyword arguments.
-            """
-            self.args = args
-            self.kwargs = kwargs
-
-    class TraceType:
-        """Represents the type of object(s) for `tf.function` tracing."""
-
-        def __init__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
-            """Initialize `TraceType`.
-
-            Args:
-                *args: Positional arguments.
-                **kwargs: Keyword arguments.
-            """
-            self.args = args
-            self.kwargs = kwargs
-
-    @staticmethod
-    def distributed(*args: TensorOperand, **kwargs: TensorOperand) -> None:
-        """Distributed tensor type namespace stub.
+    def __call__(self, *args: TensorOperand, **kwargs: TensorOperand) -> TensorOperand:
+        """Allow invocation as a no-op stub for backwards compatibility.
 
         Args:
             *args: Positional arguments.
             **kwargs: Keyword arguments.
+
+        Returns:
+            TensorOperand: Always `None`.
         """
-        return
+        del args, kwargs
+        return None
+
+
+class experimental:
+    """Experimental TensorFlow trace and function types."""
+
+    class TraceType(_BaseTraceType):
+        """Base protocol for representing the type of objects for `tf.function` tracing."""
+
+    class TensorLike(TraceType):
+        """Base type for tensor-like objects (`Tensor`, `Variable`, `SparseTensor`)."""
+
+    class SupportsTracingProtocol(TraceType):
+        """Protocol for custom types supporting `tf.function` tracing."""
+
+        def __tf_tracing_type__(self, context: TensorOperand = None) -> _BaseTraceType:
+            """Return the `TraceType` for this object inside a tracing context.
+
+            Args:
+                context: Tracing context.
+
+            Returns:
+                _BaseTraceType: Trace type instance.
+            """
+            del context
+            return experimental.TraceType(*self.args, **self.kwargs)
+
+    class Callable(TraceType):
+        """Base type for TensorFlow callables."""
+
+    class FunctionType(Callable):
+        """Represents the type signature of a TensorFlow function."""
+
+    class AtomicFunction(Callable):
+        """Base class for graph functions."""
+
+    class ConcreteFunction(AtomicFunction):
+        """A specialization of a `PolymorphicFunction` for a fixed input signature."""
+
+    class GenericFunction(Callable):
+        """Base class for polymorphic graph functions."""
+
+    class PolymorphicFunction(GenericFunction):
+        """Base class for `@tf.function` polymorphic callables."""
+
+    distributed = _DistributedNamespace()

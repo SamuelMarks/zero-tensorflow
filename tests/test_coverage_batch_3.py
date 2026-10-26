@@ -60,7 +60,8 @@ def test_data_stubs(tmp_path: Path) -> None:
     ) == [b"1111", b"2222"]
 
     tfr_file = tmp_path / "data.tfrecord"
-    tfr_file.write_bytes(b"record_payload")
+    with tf.io.TFRecordWriter(str(tfr_file)) as writer:
+        writer.write(b"record_payload")
     assert list(tf.data.TFRecordDataset(str(tfr_file))) == [b"record_payload"]
 
     opt3 = tf.data.Options(threading=None, autotune=True, extra_kwarg=42)
@@ -198,7 +199,14 @@ def test_data_stubs(tmp_path: Path) -> None:
         next(it_pref_err)
 
     def bad_map(x: tf.data.DatasetElement) -> tf.data.DatasetElement:
-        """Raise `ValueError` unconditionally."""
+        """Raise `ValueError` unconditionally.
+
+        Args:
+            x: Input dataset element.
+
+        Raises:
+            ValueError: Always raised.
+        """
         del x
         raise ValueError("bad map")
 

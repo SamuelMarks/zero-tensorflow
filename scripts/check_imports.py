@@ -1,4 +1,4 @@
-"""Verify that non-test source files only import allowed standard library and ecosystem dependencies."""
+"""Verify that source, script, and non-parity test files only import allowed dependencies."""
 
 from __future__ import annotations
 
@@ -6,15 +6,24 @@ import ast
 import glob
 import importlib.util
 import sys
+from collections.abc import Sequence
+from pathlib import Path
 
 ALLOWED_3RD_PARTY: set[str] = {
     "cdd",
+    "cdd_python",
     "ml_ecosystem_snapshots",
     "ml_switcheroo_compiler",
     "ml_switcheroo_ir",
     "pydantic",
     "typing_extensions",
     "zero_keras",
+}
+
+ALLOWED_TEST_MODULES: set[str] = {
+    "pytest",
+    "scripts",
+    "tests",
 }
 
 STDLIB: set[str] = {
@@ -91,18 +100,21 @@ def is_stdlib(module_name: str) -> bool:
     return False
 
 
-def check_module(base_module: str) -> bool:
-    """Determine whether `base_module` is an allowed import in `src/`.
+def check_module(base_module: str, is_test_or_script: bool = False) -> bool:
+    """Determine whether `base_module` is an allowed import.
 
     Args:
         base_module: Top-level package/module name.
+        is_test_or_script: Whether the file being checked is in `tests/` or `scripts/`.
 
     Returns:
         bool: `True` if the module is permitted.
     """
-    if base_module == "zero_tensorflow":
+    if base_module == "zero_tensorflow" or base_module.startswith("zero_"):
         return True
     if base_module in ALLOWED_3RD_PARTY:
+        return True
+    if is_test_or_script and base_module in ALLOWED_TEST_MODULES:
         return True
     return is_stdlib(base_module)
 
@@ -165,6 +177,8 @@ def check_file(filepath: str) -> list[tuple[int, str]]:
             return [(0, "SyntaxError")]
 
     disallowed: list[tuple[int, str]] = []
+    parts = Path(filepath).parts
+    is_test_or_script = "tests" in parts or "scripts" in parts
 
     def verify_module(lineno: int, name: str | None) -> None:
         """Record a violation if `name` is None or not an allowed module.
@@ -178,7 +192,7 @@ def check_file(filepath: str) -> list[tuple[int, str]]:
             return
 
         base_module = name.split(".")[0]
-        if not check_module(base_module):
+        if not check_module(base_module, is_test_or_script=is_test_or_script):
             disallowed.append((lineno, name))
 
     for node in ast.walk(tree):
@@ -206,30 +220,55 @@ def check_file(filepath: str) -> list[tuple[int, str]]:
                 verify_module(node.lineno, None)
         elif isinstance(node, ast.Attribute) and node.attr == "__dict__":
             disallowed.append((node.lineno, "__dict__"))
+        elif isinstance(node, ast.Name) and node.id in (
+            "Any",
+            "object",
+            "cast",
+            "getattr",
+            "setattr",
+            "hasattr",
+            "delattr",
+        ):
+            disallowed.append((node.lineno, node.id))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in (
+            "__getattr__",
+            "__setattr__",
+            "__getattribute__",
+        ):
+            disallowed.append((node.lineno, node.name))
 
     return disallowed
 
 
-def main(search_pattern: str = "src/**/*.py") -> int:
-    """Check all matching source files and return exit code `0` or `1`.
+def main(
+    search_pattern: str | Sequence[str] = (
+        "src/**/*.py",
+        "scripts/**/*.py",
+        "tests/**/*.py",
+    ),
+) -> int:
+    """Check all matching source, script, and test files and return exit code `0` or `1`.
 
     Args:
-        search_pattern: Glob pattern of Python files to check.
+        search_pattern: Glob pattern or sequence of glob patterns of Python files to check.
 
     Returns:
         int: `0` if all imports are allowed, `1` if disallowed imports exist.
     """
     has_errors = False
-    src_files = sorted(glob.glob(search_pattern, recursive=True))
+    patterns = [search_pattern] if isinstance(search_pattern, str) else list(search_pattern)
+    matched_files: list[str] = []
+    for pat in patterns:
+        matched_files.extend(sorted(glob.glob(pat, recursive=True)))
 
-    for filepath in src_files:
+    for filepath in sorted(set(matched_files)):
         errors = check_file(filepath)
         if errors:
             has_errors = True
             for lineno, module in errors:
                 print(
                     f"{filepath}:{lineno} Disallowed import: '{module}'. "
-                    "Only standard library and allowed 3rd-party dependencies are permitted in non-test code."
+                    "Only standard library and allowed 3rd-party dependencies are permitted."
                 )
 
     return 1 if has_errors else 0

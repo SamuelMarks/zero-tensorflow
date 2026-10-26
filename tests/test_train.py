@@ -30,15 +30,18 @@ def test_checkpoint_manager() -> None:
     assert mgr._checkpoint is ckpt
     assert mgr._directory == "dir"
     assert mgr._max_to_keep == 2
-    assert mgr.latest_checkpoint is None
+    initial_latest: str | None = mgr.latest_checkpoint
+    assert initial_latest is None
     assert mgr.checkpoints == []
 
     first = mgr.save()
     assert first == "dir/ckpt-1"
-    assert mgr.latest_checkpoint == "dir/ckpt-1"
+    first_latest: str | None = mgr.latest_checkpoint
+    assert first_latest == "dir/ckpt-1"
     assert mgr.checkpoints == ["dir/ckpt-1"]
 
     second = mgr.save(checkpoint_number=10)
     assert second == "dir/ckpt-10"
-    assert mgr.latest_checkpoint == "dir/ckpt-10"
+    second_latest: str | None = mgr.latest_checkpoint
+    assert second_latest == "dir/ckpt-10"
     assert mgr.checkpoints == ["dir/ckpt-1", "dir/ckpt-10"]

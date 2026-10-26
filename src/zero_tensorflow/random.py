@@ -51,6 +51,10 @@ def _extract_seed(seed: int | Sequence[int] | None) -> int | None:
     if isinstance(seed, int):
         return seed
     if isinstance(seed, Sequence):
+        if len(seed) >= 2:
+            return (
+                int(seed[0]) * 6364136223846793005 + int(seed[1]) + 1442695040888963407
+            ) & 0x7FFFFFFF
         return int(seed[0]) if seed else 0
     return None
 
@@ -74,6 +78,16 @@ class Generator:
             seed: Optional integer seed.
         """
         self._seed = seed
+
+    def _next_seed(self) -> int:
+        """Advance generator state and return next step seed.
+
+        Returns:
+            int: Next step seed.
+        """
+        base = self._seed if self._seed is not None else 0
+        self._seed = (base * 1664525 + 1013904223) & 0x7FFFFFFF
+        return self._seed
 
     @classmethod
     def from_seed(cls, seed: int, alg: int | str | None = None) -> Generator:
@@ -110,7 +124,9 @@ class Generator:
             Tensor: A tensor of the specified shape filled with uniform values.
         """
         del name
-        res: msc_core.Tensor = zk_random.uniform(shape, minval, maxval, dtype, seed=self._seed)
+        res: msc_core.Tensor = zk_random.uniform(
+            shape, minval, maxval, dtype, seed=self._next_seed()
+        )
         return _wrap_tensor(res)
 
     def normal(
@@ -134,7 +150,7 @@ class Generator:
             Tensor: A tensor of the specified shape filled with normal values.
         """
         del name
-        res: msc_core.Tensor = zk_random.normal(shape, mean, stddev, dtype, seed=self._seed)
+        res: msc_core.Tensor = zk_random.normal(shape, mean, stddev, dtype, seed=self._next_seed())
         return _wrap_tensor(res)
 
 

@@ -5630,6 +5630,12 @@
       },
       "yuv_to_rgb": {
         "type": "function"
+      },
+      "decode_jxl": {
+        "type": "function"
+      },
+      "decode_webp": {
+        "type": "function"
       }
     }
   },
@@ -16796,6 +16802,9 @@
     "type": "class"
   },
   "zeros_like": {
+    "type": "function"
+  },
+  "check_pinned": {
     "type": "function"
   }
 }

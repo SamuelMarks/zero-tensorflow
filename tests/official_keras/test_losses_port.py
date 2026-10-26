@@ -18,3 +18,6 @@ class LossesTest(TensorFlowTestCase):
         y_pred = tf.Tensor([3.0, 4.0])
         loss_val = tf.Tensor(mse(y_true, y_pred))
         self.assertAllClose(loss_val, 4.0)
+        self.assertDifferentialParity(
+            lambda backend: backend.keras.losses.MeanSquaredError()(y_true, y_pred)
+        )

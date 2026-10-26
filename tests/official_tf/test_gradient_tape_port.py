@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import zero_tensorflow as tf
-from tests.conftest import FakeBackprop, TensorFlowTestCase
+from tests.conftest import TensorFlowTestCase
 
 
 class BackpropTest(TensorFlowTestCase):
@@ -11,11 +11,11 @@ class BackpropTest(TensorFlowTestCase):
 
     def testGradientTape(self) -> None:
         """Verify nested `GradientTape` differentiation."""
-        with FakeBackprop.GradientTape() as g:
+        with tf.GradientTape() as g:
             x = tf.Tensor(3.0)
             g.watch(x)
             y = x * x
-            with FakeBackprop.GradientTape() as gg:
+            with tf.GradientTape() as gg:
                 gg.watch(y)
                 z = 2 * y
             inner_grads = gg.gradient(z, [y])
@@ -29,7 +29,7 @@ class BackpropTest(TensorFlowTestCase):
 
     def testGradientTapeBasicStub(self) -> None:
         """Verify single-level `GradientTape` differentiation of `x * x`."""
-        with FakeBackprop.GradientTape() as g:
+        with tf.GradientTape() as g:
             x = tf.Tensor(3.0)
             g.watch(x)
             y = x * x

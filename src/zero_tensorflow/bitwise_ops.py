@@ -15,108 +15,118 @@ class bitwise:
 
     @staticmethod
     def bitwise_and(
-        *args: Tensor | TensorOperand,
-        **kwargs: Tensor | TensorOperand,
+        x: Tensor | TensorOperand = 0,
+        y: Tensor | TensorOperand = 0,
+        name: str | None = None,
     ) -> Tensor:
-        """Execute `bitwise.bitwise_and` operation.
+        """Compute the bitwise AND of `x` and `y` element-wise.
 
         Args:
-            *args: Positional operation arguments.
-            **kwargs: Keyword operation arguments.
+            x: First integer tensor.
+            y: Second integer tensor.
+            name: Optional operation name.
 
         Returns:
-            Tensor: Operation result.
+            Tensor: Bitwise AND tensor.
         """
-        del kwargs
-        res = _ops.bitwise_and(*[_to_tensor(a) for a in args])
+        del name
+        res = _ops.bitwise_and(_to_tensor(x), _to_tensor(y))
         return _wrap_tensor(res)
 
     @staticmethod
     def invert(
-        *args: Tensor | TensorOperand,
-        **kwargs: Tensor | TensorOperand,
+        x: Tensor | TensorOperand = 0,
+        name: str | None = None,
     ) -> Tensor:
-        """Execute `bitwise.invert` operation.
+        """Invert (flip) each bit of `x` element-wise.
 
         Args:
-            *args: Positional operation arguments.
-            **kwargs: Keyword operation arguments.
+            x: Integer tensor.
+            name: Optional operation name.
 
         Returns:
-            Tensor: Operation result.
+            Tensor: Bitwise NOT tensor.
         """
-        del kwargs
-        res = _ops.bitwise_not(*[_to_tensor(a) for a in args])
+        del name
+        res = _ops.bitwise_not(_to_tensor(x))
         return _wrap_tensor(res)
 
     @staticmethod
     def bitwise_or(
-        *args: Tensor | TensorOperand,
-        **kwargs: Tensor | TensorOperand,
+        x: Tensor | TensorOperand = 0,
+        y: Tensor | TensorOperand = 0,
+        name: str | None = None,
     ) -> Tensor:
-        """Execute `bitwise.bitwise_or` operation.
+        """Compute the bitwise OR of `x` and `y` element-wise.
 
         Args:
-            *args: Positional operation arguments.
-            **kwargs: Keyword operation arguments.
+            x: First integer tensor.
+            y: Second integer tensor.
+            name: Optional operation name.
 
         Returns:
-            Tensor: Operation result.
+            Tensor: Bitwise OR tensor.
         """
-        del kwargs
-        res = _ops.bitwise_or(*[_to_tensor(a) for a in args])
+        del name
+        res = _ops.bitwise_or(_to_tensor(x), _to_tensor(y))
         return _wrap_tensor(res)
 
     @staticmethod
     def bitwise_xor(
-        *args: Tensor | TensorOperand,
-        **kwargs: Tensor | TensorOperand,
+        x: Tensor | TensorOperand = 0,
+        y: Tensor | TensorOperand = 0,
+        name: str | None = None,
     ) -> Tensor:
-        """Execute `bitwise.bitwise_xor` operation.
+        """Compute the bitwise XOR of `x` and `y` element-wise.
 
         Args:
-            *args: Positional operation arguments.
-            **kwargs: Keyword operation arguments.
+            x: First integer tensor.
+            y: Second integer tensor.
+            name: Optional operation name.
 
         Returns:
-            Tensor: Operation result.
+            Tensor: Bitwise XOR tensor.
         """
-        del kwargs
-        res = _ops.bitwise_xor(*[_to_tensor(a) for a in args])
+        del name
+        res = _ops.bitwise_xor(_to_tensor(x), _to_tensor(y))
         return _wrap_tensor(res)
 
     @staticmethod
     def left_shift(
-        *args: Tensor | TensorOperand,
-        **kwargs: Tensor | TensorOperand,
+        x: Tensor | TensorOperand = 0,
+        y: Tensor | TensorOperand = 0,
+        name: str | None = None,
     ) -> Tensor:
-        """Execute `bitwise.left_shift` operation.
+        """Compute the bitwise left-shift of `x` by `y` bits element-wise.
 
         Args:
-            *args: Positional operation arguments.
-            **kwargs: Keyword operation arguments.
+            x: Value integer tensor.
+            y: Shift amount integer tensor.
+            name: Optional operation name.
 
         Returns:
-            Tensor: Operation result.
+            Tensor: Left-shifted tensor.
         """
-        del kwargs
-        res = _ops.left_shift(*[_to_tensor(a) for a in args])
+        del name
+        res = _ops.left_shift(_to_tensor(x), _to_tensor(y))
         return _wrap_tensor(res)
 
     @staticmethod
     def right_shift(
-        *args: Tensor | TensorOperand,
-        **kwargs: Tensor | TensorOperand,
+        x: Tensor | TensorOperand = 0,
+        y: Tensor | TensorOperand = 0,
+        name: str | None = None,
     ) -> Tensor:
-        """Execute `bitwise.right_shift` operation.
+        """Compute the bitwise right-shift of `x` by `y` bits element-wise.
 
         Args:
-            *args: Positional operation arguments.
-            **kwargs: Keyword operation arguments.
+            x: Value integer tensor.
+            y: Shift amount integer tensor.
+            name: Optional operation name.
 
         Returns:
-            Tensor: Operation result.
+            Tensor: Right-shifted tensor.
         """
-        del kwargs
-        res = _ops.right_shift(*[_to_tensor(a) for a in args])
+        del name
+        res = _ops.right_shift(_to_tensor(x), _to_tensor(y))
         return _wrap_tensor(res)

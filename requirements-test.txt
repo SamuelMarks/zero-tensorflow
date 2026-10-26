@@ -1,14 +1,7 @@
 pytest
 pytest-cov
-absl-py
-parameterized
-mock
 pytest-json-report
-numpy
 mypy>=1.10.0
 interrogate>=1.7.0
 ruff>=0.4.4
-ml-ecosystem-snapshots @ https://github.com/SamuelMarks/ml-ecosystem-snapshots/releases/download/v0.0.4/ml_ecosystem_snapshots-0.0.4-py3-none-any.whl
-tensorflow-macos; sys_platform == 'darwin'
-tensorflow[and-cuda]; sys_platform == 'linux'
-tensorflow; sys_platform == 'win32'
+ml-ecosystem-snapshots @ https://github.com/SamuelMarks/ml-ecosystem-snapshots/releases/download/v0.0.5/ml_ecosystem_snapshots-0.0.5-py3-none-any.whl

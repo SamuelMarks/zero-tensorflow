@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import zero_tensorflow as tf
 from zero_tensorflow._typing import TensorOperand
-
-import numpy as np
 
 
 def test_distribute_stubs() -> None:
@@ -69,7 +68,15 @@ def test_distribute_stubs() -> None:
         assert tf.distribute.get_strategy() is ms
 
         def _plus_one(*args: TensorOperand, **kwargs: TensorOperand) -> TensorOperand:
-            """Add 1 to `x` and verify active replica context."""
+            """Add 1 to `x` and verify active replica context.
+
+            Args:
+                *args: Positional replica arguments.
+                **kwargs: Keyword replica arguments.
+
+            Returns:
+                TensorOperand: Incremented integer result.
+            """
             assert tf.distribute.in_cross_replica_context() is False
             assert isinstance(tf.distribute.get_replica_context(), tf.distribute.ReplicaContext)
             val = args[0] if args else kwargs.get("x", 0)
@@ -125,7 +132,7 @@ def test_io_stubs(tmp_path: Path) -> None:
     assert tf.io.decode_raw() is None
     raw_u8 = tf.io.decode_raw(b"\x01\x02", out_type="uint8")
     assert isinstance(raw_u8, tf.Tensor)
-    np.testing.assert_array_equal(raw_u8.numpy(), [1, 2])
+    tf.debugging.assert_equal(raw_u8, [1, 2])
     tf.io.deserialize_many_sparse()
     tf.io.encode_jpeg()
     tf.io.encode_png()
@@ -186,11 +193,13 @@ def test_saved_model_stubs(tmp_path: Path) -> None:
     assert tf.saved_model.Asset("vocab.txt") is not None
     assert tf.saved_model.LoadOptions() is not None
     assert tf.saved_model.SaveOptions() is not None
-    tf.saved_model.contains_saved_model(sm_dir)
+    assert tf.saved_model.contains_saved_model(sm_dir) is True
     assert tf.saved_model.experimental.Fingerprint() is not None
     assert tf.saved_model.experimental.TrackableResource() is not None
     assert tf.saved_model.experimental.VariablePolicy() is not None
-    assert tf.saved_model.experimental.read_fingerprint(sm_dir) is None
+    fp = tf.saved_model.experimental.read_fingerprint(sm_dir)
+    assert isinstance(fp, tf.saved_model.experimental.Fingerprint)
+    assert fp.saved_model_checksum > 0
 
 
 def test_signal_stubs() -> None:
@@ -211,14 +220,14 @@ def test_signal_stubs() -> None:
     h = tf.signal.hann_window(10, periodic=True)
     h_sym = tf.signal.hann_window(10, periodic=False)
     assert len(h) == 10 and len(h_sym) == 10
-    assert not np.allclose(h.numpy(), h_sym.numpy())
+    assert tf.debugging._flatten_floats(h) != tf.debugging._flatten_floats(h_sym)
     assert tf.signal.hann_window(0).shape == (0,)
     assert tf.signal.hann_window(1).numpy() == [1.0]
 
     hm = tf.signal.hamming_window(10, periodic=True)
     hm_sym = tf.signal.hamming_window(10, periodic=False)
     assert len(hm) == 10 and len(hm_sym) == 10
-    assert not np.allclose(hm.numpy(), hm_sym.numpy())
+    assert tf.debugging._flatten_floats(hm) != tf.debugging._flatten_floats(hm_sym)
     assert tf.signal.hamming_window(0).shape == (0,)
     assert tf.signal.hamming_window(1).numpy() == [1.0]
 
@@ -238,12 +247,33 @@ def test_strings_stubs() -> None:
     assert tf.strings.bytes_split("abc") == ["a", "b", "c"]
     assert tf.strings.bytes_split(["ab", "cd"]) == [["a", "b"], ["c", "d"]]
 
+    class _FakeArrayStr:
+        """Pure-Python 0-D string `ArrayLikeProtocol` test helper."""
+
+        @property
+        def shape(self) -> tuple[int, ...]:
+            """Return 0-D shape."""
+            return ()
+
+        @property
+        def size(self) -> int:
+            """Return element count."""
+            return 1
+
+        def tolist(self) -> str:
+            """Return scalar string."""
+            return "a"
+
+        def item(self) -> str:
+            """Return scalar string."""
+            return "a"
+
     class MockTensor:
         """Test helper implementing `NumpyConvertibleProtocol`."""
 
         def numpy(self) -> TensorOperand:
-            """Return a 0-D NumPy string array."""
-            return np.array("a")
+            """Return a 0-D string `ArrayLikeProtocol`."""
+            return _FakeArrayStr()
 
     assert tf.strings.length(MockTensor()) == 1
     assert tf.strings.length("é", unit="BYTE") == 2
@@ -252,9 +282,9 @@ def test_strings_stubs() -> None:
     assert tf.strings.lower("A") == "a"
     assert tf.strings.upper("a") == "A"
     assert tf.strings.substr("abc", 1, 1) == "b"
-    assert tf.strings.regex_full_match("abc", ".*b.*") is True
+    assert bool(tf.strings.regex_full_match("abc", ".*b.*")) is True
     n_float = tf.strings.to_number("1.2")
-    assert isinstance(n_float, float) and np.isclose(n_float, 1.2)
+    assert isinstance(n_float, float) and math.isclose(n_float, 1.2)
     n_int = tf.strings.to_number("42", out_type=tf.int32)
     assert n_int == 42
     assert tf.strings.format("{} {}", ["a", "b"]) == "a b"
@@ -262,7 +292,8 @@ def test_strings_stubs() -> None:
     hb = tf.strings.to_hash_bucket("a", 10)
     assert isinstance(hb, int) and 0 <= hb < 10
     assert tf.strings.to_hash_bucket_fast("a", 10) == hb
-    assert tf.strings.to_hash_bucket_strong("a", 10, [1, 2]) == hb
+    hb_strong = tf.strings.to_hash_bucket_strong("a", 10, [1, 2])
+    assert isinstance(hb_strong, int) and 0 <= hb_strong < 10
 
     assert tf.strings.ngrams(["a", "b", "c"], 2) == ["a b", "b c"]
     assert tf.strings.ngrams(["a"], 2, preserve_short_sequences=True) == ["a"]
@@ -273,7 +304,7 @@ def test_strings_stubs() -> None:
     codes, offsets = tf.strings.unicode_decode_with_offsets("ab", "utf-8")
     assert codes == [97, 98] and offsets == [0, 1]
     assert tf.strings.unicode_encode([97, 98], "utf-8") == ["ab"]
-    assert tf.strings.unicode_script([97, 98]) == [0, 0]
+    assert tf.strings.unicode_script([97, 98]) == [25, 25]
     assert tf.strings.unicode_split("ab", "utf-8") == ["a", "b"]
     chars, char_offsets = tf.strings.unicode_split_with_offsets("ab", "utf-8")
     assert chars == ["a", "b"] and char_offsets == [0, 1]
