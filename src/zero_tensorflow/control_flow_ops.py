@@ -4,27 +4,49 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import json
 import logging
 import os
 import time
+import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from types import TracebackType
 
 from zero_tensorflow import debugging as _debugging
-from zero_tensorflow._typing import ArrayLikeProtocol, CallableOperandProtocol, TensorOperand
+from zero_tensorflow._typing import (
+    ArrayLikeProtocol,
+    CallableOperandProtocol,
+    DTypeLike,
+    TensorOperand,
+    WhileBodyProtocol,
+    WhileCondProtocol,
+)
 from zero_tensorflow.autodiff import GradientTape as _GradientTape
 from zero_tensorflow.core_stubs import is_symbolic_tensor
-from zero_tensorflow.core_tensor import Tensor, Variable, _to_tensor, _wrap, _wrap_tensor
+from zero_tensorflow.core_tensor import (
+    Tensor,
+    Variable,
+    _to_tensor,
+    _wrap,
+    _wrap_tensor,
+    to_dtype,
+)
+from zero_tensorflow.dtypes import DType
+from zero_tensorflow.io import FixedLenFeature, VarLenFeature
+from zero_tensorflow.ragged import RaggedTensor
+from zero_tensorflow.sparse import SparseTensor
 from zero_tensorflow.spec_types import (
     _GRADIENT_REGISTRY,
     _NAME_SCOPE_STACK,
+    IndexedSlices,
     Operation,
+    TensorShape,
     UnconnectedGradients,
 )
 
 from ml_switcheroo_compiler.core.config import config as _compiler_config
-from ml_switcheroo_compiler.core.dtype import DType
 from ml_switcheroo_compiler.tracing.state import global_tracing_state as _tracer
+from ml_switcheroo_ir import LogicalGraph
 from zero_keras import ops as _ops
 
 __all__ = [
@@ -244,6 +266,7 @@ def cond(
     | Tensor
     | TensorOperand = None,
     name: str | None = None,
+    strict: bool = False,
 ) -> Tensor | Sequence[Tensor | TensorOperand] | TensorOperand:
     """Return `true_fn()` if the predicate `pred` is true else `false_fn()`.
 
@@ -252,13 +275,28 @@ def cond(
         true_fn: Callable to be performed if `pred` is true.
         false_fn: Callable to be performed if `pred` is false.
         name: Optional name prefix for the returned tensors.
+        strict: Whether to enforce strict output structure matching.
 
     Returns:
         Tensor | Sequence[Tensor | TensorOperand] | TensorOperand: Conditional result.
     """
-    del name
+    del name, strict
     if pred is None:
         return None
+    if _tracer.is_tracing and _tracer.active_graph is not None:
+        parent_graph = _tracer.active_graph
+        true_graph = LogicalGraph(name="cond_true")
+        _tracer.active_graph = true_graph
+        t_out = _eval_branch(true_fn)
+        false_graph = LogicalGraph(name="cond_false")
+        _tracer.active_graph = false_graph
+        f_out = _eval_branch(false_fn)
+        _tracer.active_graph = parent_graph
+        parent_graph.nodes.update(true_graph.nodes)
+        parent_graph.nodes.update(false_graph.nodes)
+        if isinstance(t_out, Tensor) and isinstance(f_out, Tensor):
+            return _wrap_tensor(_ops.where(_to_tensor(pred), _to_tensor(t_out), _to_tensor(f_out)))
+        return t_out
     return _eval_branch(true_fn) if _to_bool(pred) else _eval_branch(false_fn)
 
 
@@ -294,16 +332,42 @@ def case(
 
     Returns:
         Tensor | Sequence[Tensor | TensorOperand] | TensorOperand: Selected branch result.
+
+    Raises:
+        ValueError: If `exclusive=True` and multiple predicates are true, or `strict=True` and none match.
     """
-    del exclusive, strict, name
+    del name
+    pairs_list: list[
+        builtins.tuple[
+            Tensor | TensorOperand,
+            Callable[[], Tensor | Sequence[Tensor | TensorOperand] | TensorOperand]
+            | Tensor
+            | TensorOperand,
+        ]
+    ] = []
     if isinstance(pred_fn_pairs, Mapping):
-        for pred_key, fn_val in pred_fn_pairs.items():
-            if _to_bool(pred_key):
-                return _eval_branch(fn_val)
+        pairs_list = list(pred_fn_pairs.items())
     elif isinstance(pred_fn_pairs, Sequence) and not isinstance(pred_fn_pairs, (str, bytes)):
-        for item in pred_fn_pairs:
-            if isinstance(item, builtins.tuple) and len(item) == 2 and _to_bool(item[0]):
-                return _eval_branch(item[1])
+        pairs_list = [
+            (item[0], item[1])
+            for item in pred_fn_pairs
+            if isinstance(item, builtins.tuple) and len(item) == 2
+        ]
+
+    matched_fns: list[
+        Callable[[], Tensor | Sequence[Tensor | TensorOperand] | TensorOperand]
+        | Tensor
+        | TensorOperand
+    ] = [fn_val for pred_key, fn_val in pairs_list if _to_bool(pred_key)]
+
+    if exclusive and len(matched_fns) > 1:
+        raise ValueError(
+            f"More than one predicate evaluated to True in exclusive case ({len(matched_fns)})."
+        )
+    if matched_fns:
+        return _eval_branch(matched_fns[0])
+    if strict and default is None:
+        raise ValueError("No predicate evaluated to True in strict case with default=None.")
     return _eval_branch(default) if default is not None else None
 
 
@@ -348,15 +412,47 @@ def switch_case(
     if (
         isinstance(branch_fns, Sequence)
         and not isinstance(branch_fns, (str, bytes))
-        and 0 <= idx < len(branch_fns)
+        and len(branch_fns) > 0
     ):
-        return _eval_branch(branch_fns[idx])
+        if 0 <= idx < len(branch_fns):
+            return _eval_branch(branch_fns[idx])
+        if default is None:
+            return _eval_branch(branch_fns[-1])
     return _eval_branch(default) if default is not None else None
 
 
+def _check_shape_invariants(
+    state: TensorOperand,
+    shape_invariants: TensorOperand,
+) -> None:
+    """Validate that tensors in `state` are compatible with `shape_invariants`.
+
+    Args:
+        state: Current loop variables state.
+        shape_invariants: Expected `TensorShape` or nested structure of `TensorShape`s.
+
+    Raises:
+        ValueError: If any tensor shape is incompatible with its corresponding invariant.
+    """
+    if shape_invariants is None:
+        return
+    flat_state = [state] if isinstance(state, Tensor) else nest.flatten(state)
+    flat_inv = (
+        [shape_invariants]
+        if isinstance(shape_invariants, TensorShape)
+        else nest.flatten(shape_invariants)
+    )
+    if any(
+        isinstance(inv, TensorShape)
+        and not inv.is_compatible_with(val.shape if isinstance(val, Tensor) else ())
+        for val, inv in zip(flat_state, flat_inv)
+    ):
+        raise ValueError("Loop variable shape is not compatible with shape_invariant.")
+
+
 def while_loop(
-    cond: CallableOperandProtocol | TensorOperand = None,
-    body: CallableOperandProtocol | TensorOperand = None,
+    cond: WhileCondProtocol | CallableOperandProtocol | TensorOperand = None,
+    body: WhileBodyProtocol | CallableOperandProtocol | TensorOperand = None,
     loop_vars: Sequence[Tensor | TensorOperand] | Tensor | TensorOperand = None,
     shape_invariants: TensorOperand = None,
     parallel_iterations: int = 10,
@@ -370,7 +466,7 @@ def while_loop(
     Args:
         cond: Callable returning a boolean scalar tensor/value for the loop state.
         body: Callable taking the loop state and returning the updated loop state.
-        loop_vars: Initial loop state (a `Tensor`, tuple, or list of `Tensor`s).
+        loop_vars: Initial loop state (a `Tensor`, tuple, list, or dict of `Tensor`s).
         shape_invariants: Optional shape invariants for `loop_vars`.
         parallel_iterations: Number of iterations allowed to run in parallel.
         back_prop: Whether backprop is enabled.
@@ -381,13 +477,20 @@ def while_loop(
     Returns:
         Tensor | Sequence[Tensor | TensorOperand] | TensorOperand: Loop state after termination.
     """
-    del shape_invariants, parallel_iterations, back_prop, swap_memory, name
+    del parallel_iterations, back_prop, swap_memory, name
     if (
-        not isinstance(cond, CallableOperandProtocol)
-        or not isinstance(body, CallableOperandProtocol)
+        not isinstance(cond, WhileCondProtocol)
+        or not isinstance(body, WhileBodyProtocol)
         or loop_vars is None
     ):
         return _wrap(loop_vars) if loop_vars is not None else None
+
+    _check_shape_invariants(loop_vars, shape_invariants)
+    if _tracer.is_tracing and _tracer.active_graph is not None:
+        step_state = (
+            body(*loop_vars) if isinstance(loop_vars, (builtins.tuple, list)) else body(loop_vars)
+        )
+        return _wrap(step_state)
 
     state: Sequence[Tensor | TensorOperand] | Tensor | TensorOperand = loop_vars
     max_steps = maximum_iterations if isinstance(maximum_iterations, int) else 10000
@@ -397,6 +500,7 @@ def while_loop(
         if not _to_bool(c_val):
             break
         state = body(*state) if isinstance(state, (builtins.tuple, list)) else body(state)
+        _check_shape_invariants(state, shape_invariants)
         steps += 1
     return _wrap(state)
 
@@ -531,9 +635,44 @@ def foldr(
     return acc
 
 
+def _stack_nested_outputs(
+    outputs: list[TensorOperand],
+) -> Tensor | Sequence[TensorOperand] | Mapping[str, TensorOperand]:
+    """Stack a list of per-element outputs (Tensor, tuple, list, or dict) along axis 0.
+
+    Args:
+        outputs: Non-empty list of per-slice outputs from `map_fn`.
+
+    Returns:
+        Tensor | Sequence[TensorOperand] | Mapping[str, TensorOperand]: Stacked structure.
+    """
+    first = outputs[0]
+    if isinstance(first, builtins.tuple):
+        return builtins.tuple(
+            _stack_nested_outputs([item[i] for item in outputs if isinstance(item, Sequence)])
+            for i in range(len(first))
+        )
+    if isinstance(first, list):
+        return [
+            _stack_nested_outputs([item[i] for item in outputs if isinstance(item, Sequence)])
+            for i in range(len(first))
+        ]
+    if isinstance(first, Mapping):
+        return {
+            str(k): _stack_nested_outputs(
+                [item[k] for item in outputs if isinstance(item, Mapping)]
+            )
+            for k in first
+        }
+    return _wrap_tensor(_ops.stack([_to_tensor(o) for o in outputs], axis=0))
+
+
 def map_fn(
-    fn: Callable[[Tensor], Tensor | TensorOperand] | TensorOperand = None,
-    elems: Tensor | Sequence[TensorOperand] | TensorOperand = None,
+    fn: Callable[[Tensor], TensorOperand]
+    | Callable[[TensorOperand], TensorOperand]
+    | CallableOperandProtocol
+    | TensorOperand = None,
+    elems: Tensor | Sequence[TensorOperand] | Mapping[str, TensorOperand] | TensorOperand = None,
     dtype: TensorOperand = None,
     parallel_iterations: int | None = None,
     back_prop: bool = True,
@@ -541,12 +680,12 @@ def map_fn(
     infer_shape: bool = True,
     name: str | None = None,
     fn_output_signature: TensorOperand = None,
-) -> Tensor | None:
+) -> Tensor | Sequence[TensorOperand] | Mapping[str, TensorOperand] | None:
     """Transform `elems` by applying `fn` to each element unstacked on axis 0.
 
     Args:
         fn: Callable to apply to each slice.
-        elems: Tensor or sequence to unpack along dimension 0.
+        elems: Tensor, sequence, or mapping of tensors to unpack along dimension 0.
         dtype: Optional output dtype.
         parallel_iterations: Optional parallel iteration count.
         back_prop: Whether backprop is enabled.
@@ -556,34 +695,50 @@ def map_fn(
         fn_output_signature: Optional output signature specification.
 
     Returns:
-        Tensor | None: Stacked mapped `Tensor`, or `None` if `elems is None`.
+        Tensor | Sequence[TensorOperand] | Mapping[str, TensorOperand] | None:
+            Stacked mapped result, or `None` if `elems is None`.
     """
     del dtype, parallel_iterations, back_prop, swap_memory, infer_shape, name, fn_output_signature
     if not callable(fn) or elems is None:
         return None
-    slices = _unpack_elems(elems)
-    mapped = [_to_tensor(fn(s)) for s in slices]
-    if not mapped:
+    if isinstance(elems, Mapping):
+        unpacked_map = {k: _unpack_elems(v) for k, v in elems.items()}
+        num_slices = min((len(v) for v in unpacked_map.values()), default=0)
+        slices_list: list[TensorOperand] = [
+            {k: unpacked_map[k][i] for k in unpacked_map} for i in range(num_slices)
+        ]
+    elif isinstance(elems, builtins.tuple):
+        unpacked_tup = [_unpack_elems(v) for v in elems]
+        num_slices = min((len(v) for v in unpacked_tup), default=0)
+        slices_list = [builtins.tuple(col[i] for col in unpacked_tup) for i in range(num_slices)]
+    else:
+        slices_list = list(_unpack_elems(elems))
+    if not slices_list:
         return Tensor([])
-    return _wrap_tensor(_ops.stack(mapped, axis=0))
+    mapped_raw = [fn(s) for s in slices_list]  # type: ignore[arg-type]
+    return _stack_nested_outputs(mapped_raw)
 
 
 def vectorized_map(
-    fn: Callable[[Tensor], Tensor | TensorOperand] | TensorOperand = None,
-    elems: Tensor | Sequence[TensorOperand] | TensorOperand = None,
+    fn: Callable[[Tensor], TensorOperand]
+    | Callable[[TensorOperand], TensorOperand]
+    | CallableOperandProtocol
+    | TensorOperand = None,
+    elems: Tensor | Sequence[TensorOperand] | Mapping[str, TensorOperand] | TensorOperand = None,
     fallback_to_while_loop: bool = True,
     warn: bool = True,
-) -> Tensor | None:
+) -> Tensor | Sequence[TensorOperand] | Mapping[str, TensorOperand] | None:
     """Parallel map of `fn` across dimension 0 of `elems`.
 
     Args:
         fn: Callable to apply to each slice of `elems`.
-        elems: Tensor or sequence to unpack along dimension 0.
+        elems: Tensor, sequence, or mapping to unpack along dimension 0.
         fallback_to_while_loop: Whether to fall back to `map_fn` if vectorization fails.
         warn: Whether to log warnings on fallback.
 
     Returns:
-        Tensor | None: Stacked mapped `Tensor`, or `None` if `elems is None`.
+        Tensor | Sequence[TensorOperand] | Mapping[str, TensorOperand] | None:
+            Stacked mapped `Tensor` or structure, or `None` if `elems is None`.
     """
     del fallback_to_while_loop, warn
     return map_fn(fn, elems)
@@ -1650,267 +1805,935 @@ class experimental:
         del args, kwargs
 
 
+class _FeatureColumnBase(dict[str, TensorOperand]):
+    """Base typed feature column supporting dictionary access and feature tensor transformation."""
+
+    def __init__(
+        self,
+        col_type: str,
+        key: str = "feature",
+        shape: builtins.tuple[int, ...] = (1,),
+        dtype: DTypeLike = "float32",
+        is_sparse: bool = False,
+        num_buckets: int = 1,
+        extra: Mapping[str, TensorOperand] | None = None,
+    ) -> None:
+        """Initialize `_FeatureColumnBase`.
+
+        Args:
+            col_type: Column type identifier string.
+            key: Feature key name.
+            shape: Output feature shape tuple.
+            dtype: Feature `DType`.
+            is_sparse: Whether parsing produces a `VarLenFeature` instead of `FixedLenFeature`.
+            num_buckets: Number of categorical buckets or embedding dimension.
+            extra: Additional metadata fields.
+        """
+        super().__init__(type=col_type, key=key, name=key)
+        if extra is not None:
+            self.update(extra)
+        self.col_type = col_type
+        self.key = key
+        self.shape = shape
+        self.dtype = to_dtype(dtype)
+        self.is_sparse = is_sparse
+        self.num_buckets = num_buckets
+
+    @property
+    def name(self) -> str:
+        """Return the feature column name.
+
+        Returns:
+            str: Column name string.
+        """
+        return self.key
+
+    @property
+    def parse_example_spec(self) -> dict[str, FixedLenFeature | VarLenFeature]:
+        """Return the `FixedLenFeature` or `VarLenFeature` parsing spec for this column.
+
+        Returns:
+            dict[str, FixedLenFeature | VarLenFeature]: Mapping from feature key to parse spec.
+        """
+        if self.is_sparse:
+            return {self.key: VarLenFeature(self.dtype)}
+        return {self.key: FixedLenFeature(self.shape, self.dtype)}
+
+    def transform_feature(
+        self,
+        inputs: Mapping[str, Tensor | TensorOperand],
+    ) -> Tensor:
+        """Transform a feature dictionary `inputs` into a dense/categorical `Tensor`.
+
+        Args:
+            inputs: Mapping from feature keys to input `Tensor`s or sequences.
+
+        Returns:
+            Tensor: Transformed feature `Tensor`.
+        """
+        raw = inputs.get(self.key, 0.0)
+        return Tensor(raw, dtype=self.dtype)
+
+
+class NumericColumn(_FeatureColumnBase):
+    """Typed real-valued dense numeric feature column."""
+
+    def __init__(
+        self,
+        key: str = "numeric",
+        shape: builtins.tuple[int, ...] = (1,),
+        default_value: float | None = None,
+        dtype: DTypeLike = "float32",
+        normalizer_fn: Callable[[Tensor], Tensor] | None = None,
+    ) -> None:
+        """Initialize `NumericColumn`.
+
+        Args:
+            key: Feature key name.
+            shape: Dense feature shape tuple.
+            default_value: Optional default scalar value.
+            dtype: Numeric `DType`.
+            normalizer_fn: Optional callable applied to the input tensor.
+        """
+        super().__init__(
+            "numeric",
+            key=key,
+            shape=shape,
+            dtype=dtype,
+            extra={"default_value": default_value},
+        )
+        self.default_value = default_value
+        self.normalizer_fn = normalizer_fn
+
+    def transform_feature(self, inputs: Mapping[str, Tensor | TensorOperand]) -> Tensor:
+        """Extract and optionally normalize the numeric feature tensor.
+
+        Args:
+            inputs: Mapping from feature keys to input tensors.
+
+        Returns:
+            Tensor: Normalized numeric tensor.
+        """
+        t = super().transform_feature(inputs)
+        return self.normalizer_fn(t) if self.normalizer_fn is not None else t
+
+
+class BucketizedColumn(_FeatureColumnBase):
+    """Typed discretized dense input column bucketed by `boundaries`."""
+
+    def __init__(
+        self,
+        source_column: NumericColumn | _FeatureColumnBase | None = None,
+        boundaries: Sequence[float] = (0.0,),
+    ) -> None:
+        """Initialize `BucketizedColumn`.
+
+        Args:
+            source_column: Underlying `NumericColumn`.
+            boundaries: Sorted sequence of bucket boundary floats.
+        """
+        src_key = (
+            source_column.key if isinstance(source_column, _FeatureColumnBase) else "bucketized"
+        )
+        self.source_column = source_column
+        self.boundaries = builtins.tuple(float(b) for b in boundaries)
+        super().__init__(
+            "bucketized",
+            key=src_key,
+            shape=(1,),
+            dtype="int64",
+            num_buckets=len(self.boundaries) + 1,
+            extra={"boundaries": list(self.boundaries)},
+        )
+
+    def transform_feature(self, inputs: Mapping[str, Tensor | TensorOperand]) -> Tensor:
+        """Bucketize the source column's values against `self.boundaries`.
+
+        Args:
+            inputs: Mapping from feature keys to input tensors.
+
+        Returns:
+            Tensor: Bucket index tensor of `int32` values in `[0, len(boundaries)]`.
+        """
+        src_t = (
+            self.source_column.transform_feature(inputs)
+            if isinstance(self.source_column, _FeatureColumnBase)
+            else super().transform_feature(inputs)
+        )
+        raw_vals = nest.flatten(src_t.tolist())
+        buckets = [
+            sum(
+                1
+                for b in self.boundaries
+                if (float(v) if isinstance(v, (int, float)) else 0.0) >= b
+            )
+            for v in raw_vals
+        ]
+        return Tensor(buckets, dtype=DType.Int32)
+
+
+class IdentityCategoricalColumn(_FeatureColumnBase):
+    """Typed categorical column returning integer IDs directly as identity buckets."""
+
+    def __init__(
+        self,
+        key: str = "identity",
+        num_buckets: int = 1,
+        default_value: int | None = None,
+    ) -> None:
+        """Initialize `IdentityCategoricalColumn`.
+
+        Args:
+            key: Feature key name.
+            num_buckets: Number of categorical identity buckets.
+            default_value: Optional fallback bucket index for out-of-range values.
+        """
+        super().__init__(
+            "identity",
+            key=key,
+            dtype="int64",
+            is_sparse=True,
+            num_buckets=max(1, int(num_buckets)),
+            extra={"num_buckets": num_buckets, "default_value": default_value},
+        )
+        self.default_value = default_value
+
+
+class VocabularyListCategoricalColumn(_FeatureColumnBase):
+    """Typed categorical column mapping in-memory vocabulary items to integer IDs."""
+
+    def __init__(
+        self,
+        key: str = "vocab_list",
+        vocabulary_list: Sequence[str | int] = (),
+        dtype: DTypeLike = "string",
+        default_value: int = -1,
+        num_oov_buckets: int = 0,
+    ) -> None:
+        """Initialize `VocabularyListCategoricalColumn`.
+
+        Args:
+            key: Feature key name.
+            vocabulary_list: Sequence of vocabulary strings or integers.
+            dtype: Vocabulary element `DType`.
+            default_value: Default ID for out-of-vocabulary values when `num_oov_buckets == 0`.
+            num_oov_buckets: Number of out-of-vocabulary hash buckets.
+        """
+        self.vocabulary_list = builtins.tuple(vocabulary_list)
+        self.default_value = default_value
+        self.num_oov_buckets = max(0, int(num_oov_buckets))
+        total_b = max(1, len(self.vocabulary_list) + self.num_oov_buckets)
+        super().__init__(
+            "vocabulary_list",
+            key=key,
+            dtype=dtype,
+            is_sparse=True,
+            num_buckets=total_b,
+            extra={"vocabulary_list": list(self.vocabulary_list)},
+        )
+
+    def transform_feature(self, inputs: Mapping[str, Tensor | TensorOperand]) -> Tensor:
+        """Map input vocabulary values to integer indices.
+
+        Args:
+            inputs: Mapping from feature keys to input values.
+
+        Returns:
+            Tensor: Mapped integer ID tensor.
+        """
+        raw_in = inputs.get(self.key, [])
+        items = nest.flatten(raw_in.tolist() if isinstance(raw_in, Tensor) else raw_in)
+        lookup = {v: idx for idx, v in enumerate(self.vocabulary_list)}
+        ids: list[int] = []
+        for item in items:
+            if isinstance(item, (str, int)) and item in lookup:
+                ids.append(lookup[item])
+            elif self.num_oov_buckets > 0:
+                ids.append(
+                    len(self.vocabulary_list) + (abs(hash(str(item))) % self.num_oov_buckets)
+                )
+            else:
+                ids.append(self.default_value)
+        return Tensor(ids, dtype=DType.Int64)
+
+
+class HashBucketCategoricalColumn(_FeatureColumnBase):
+    """Typed categorical column hashing inputs into `hash_bucket_size` buckets."""
+
+    def __init__(
+        self,
+        key: str = "hash_bucket",
+        hash_bucket_size: int = 1,
+        dtype: DTypeLike = "string",
+    ) -> None:
+        """Initialize `HashBucketCategoricalColumn`.
+
+        Args:
+            key: Feature key name.
+            hash_bucket_size: Number of hash buckets.
+            dtype: Input feature `DType`.
+        """
+        self.hash_bucket_size = max(1, int(hash_bucket_size))
+        super().__init__(
+            "hash_bucket",
+            key=key,
+            dtype=dtype,
+            is_sparse=True,
+            num_buckets=self.hash_bucket_size,
+            extra={"hash_bucket_size": self.hash_bucket_size},
+        )
+
+    def transform_feature(self, inputs: Mapping[str, Tensor | TensorOperand]) -> Tensor:
+        """Hash input values modulo `self.hash_bucket_size`.
+
+        Args:
+            inputs: Mapping from feature keys to input values.
+
+        Returns:
+            Tensor: Hashed bucket ID tensor.
+        """
+        raw_in = inputs.get(self.key, [])
+        items = nest.flatten(raw_in.tolist() if isinstance(raw_in, Tensor) else raw_in)
+        hashed = [abs(hash(str(item))) % self.hash_bucket_size for item in items]
+        return Tensor(hashed, dtype=DType.Int64)
+
+
+class IndicatorColumn(_FeatureColumnBase):
+    """Typed multi-hot indicator column wrapping a categorical column."""
+
+    def __init__(self, categorical_column: _FeatureColumnBase | None = None) -> None:
+        """Initialize `IndicatorColumn`.
+
+        Args:
+            categorical_column: Underlying categorical feature column.
+        """
+        self.categorical_column = categorical_column
+        cat_key = (
+            categorical_column.key
+            if isinstance(categorical_column, _FeatureColumnBase)
+            else "indicator"
+        )
+        nb = (
+            categorical_column.num_buckets
+            if isinstance(categorical_column, _FeatureColumnBase)
+            else 1
+        )
+        super().__init__(
+            "indicator",
+            key=cat_key,
+            shape=(nb,),
+            dtype="float32",
+            num_buckets=nb,
+        )
+
+    def transform_feature(self, inputs: Mapping[str, Tensor | TensorOperand]) -> Tensor:
+        """Convert categorical IDs into one-hot / multi-hot indicator vectors.
+
+        Args:
+            inputs: Mapping from feature keys to input values.
+
+        Returns:
+            Tensor: 2-D `[batch_size, num_buckets]` float32 indicator tensor.
+        """
+        cat_ids = (
+            self.categorical_column.transform_feature(inputs)
+            if isinstance(self.categorical_column, _FeatureColumnBase)
+            else Tensor([0], dtype=DType.Int64)
+        )
+        flat_ids = [
+            int(v) if isinstance(v, (int, float)) else 0 for v in nest.flatten(cat_ids.tolist())
+        ]
+        rows: list[list[float]] = [
+            [1.0 if i == idx_val else 0.0 for i in range(self.num_buckets)] for idx_val in flat_ids
+        ]
+        return Tensor(rows, dtype=DType.Float32)
+
+
+class EmbeddingColumn(_FeatureColumnBase):
+    """Typed dense embedding lookup column wrapping a categorical column."""
+
+    def __init__(
+        self,
+        categorical_column: _FeatureColumnBase | None = None,
+        dimension: int = 1,
+        combiner: str = "mean",
+    ) -> None:
+        """Initialize `EmbeddingColumn`.
+
+        Args:
+            categorical_column: Underlying categorical column.
+            dimension: Embedding vector dimension.
+            combiner: Reduction combiner (`'mean'`, `'sqrtn'`, or `'sum'`).
+        """
+        self.categorical_column = categorical_column
+        self.dimension = max(1, int(dimension))
+        self.combiner = combiner
+        cat_key = (
+            categorical_column.key
+            if isinstance(categorical_column, _FeatureColumnBase)
+            else "embedding"
+        )
+        super().__init__(
+            "embedding",
+            key=cat_key,
+            shape=(self.dimension,),
+            dtype="float32",
+            num_buckets=self.dimension,
+            extra={"dimension": self.dimension, "combiner": combiner},
+        )
+
+    def transform_feature(self, inputs: Mapping[str, Tensor | TensorOperand]) -> Tensor:
+        """Look up deterministic embedding rows for categorical IDs.
+
+        Args:
+            inputs: Mapping from feature keys to input values.
+
+        Returns:
+            Tensor: 2-D `[batch_size, dimension]` float32 embedding tensor.
+        """
+        cat_ids = (
+            self.categorical_column.transform_feature(inputs)
+            if isinstance(self.categorical_column, _FeatureColumnBase)
+            else Tensor([0], dtype=DType.Int64)
+        )
+        flat_ids = [
+            int(v) if isinstance(v, (int, float)) else 0 for v in nest.flatten(cat_ids.tolist())
+        ]
+        rows = [
+            [float((idx_val + 1) * (d + 1)) / float(self.dimension) for d in range(self.dimension)]
+            for idx_val in flat_ids
+        ]
+        return Tensor(rows, dtype=DType.Float32)
+
+
 class feature_column:
     """TensorFlow `feature_column` structured input representation namespace."""
 
     @staticmethod
     def bucketized_column(
-        *args: TensorOperand, **kwargs: TensorOperand
-    ) -> dict[str, TensorOperand]:
+        source_column: NumericColumn | _FeatureColumnBase | TensorOperand = None,
+        boundaries: Sequence[float] | TensorOperand = (0.0,),
+        **kwargs: TensorOperand,
+    ) -> BucketizedColumn:
         """Represent discretized dense input bucketed by `boundaries`.
 
         Args:
-            *args: Positional arguments (`source_column`, `boundaries`).
-            **kwargs: Keyword arguments.
+            source_column: Underlying `NumericColumn`.
+            boundaries: Sorted sequence of bucket boundary floats.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Feature column descriptor.
+            BucketizedColumn: Typed bucketized feature column.
         """
-        return {"type": "bucketized", "args": list(args), **kwargs}
+        del kwargs
+        src = source_column if isinstance(source_column, _FeatureColumnBase) else None
+        b_seq = (
+            [float(x) for x in boundaries if isinstance(x, (int, float))]
+            if isinstance(boundaries, Sequence) and not isinstance(boundaries, (str, bytes))
+            else [0.0]
+        )
+        return BucketizedColumn(source_column=src, boundaries=b_seq)
 
     @staticmethod
     def categorical_column_with_hash_bucket(
-        *args: TensorOperand,
+        key: str = "hash_bucket",
+        hash_bucket_size: int = 1,
+        dtype: DTypeLike = "string",
         **kwargs: TensorOperand,
-    ) -> dict[str, TensorOperand]:
+    ) -> HashBucketCategoricalColumn:
         """Represent sparse categorical feature hashed into `hash_bucket_size` buckets.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            key: Feature key string.
+            hash_bucket_size: Number of hash buckets.
+            dtype: Feature `DType`.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Feature column descriptor.
+            HashBucketCategoricalColumn: Typed hash-bucket categorical column.
         """
-        return {"type": "hash_bucket", "args": list(args), **kwargs}
+        del kwargs
+        return HashBucketCategoricalColumn(
+            key=str(key),
+            hash_bucket_size=int(hash_bucket_size),
+            dtype=dtype,
+        )
 
     @staticmethod
     def categorical_column_with_identity(
-        *args: TensorOperand,
+        key: str = "identity",
+        num_buckets: int = 1,
+        default_value: int | None = None,
         **kwargs: TensorOperand,
-    ) -> dict[str, TensorOperand]:
+    ) -> IdentityCategoricalColumn:
         """Represent categorical integer IDs directly as identity buckets.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            key: Feature key string.
+            num_buckets: Number of identity buckets.
+            default_value: Optional default bucket ID.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Feature column descriptor.
+            IdentityCategoricalColumn: Typed identity categorical column.
         """
-        return {"type": "identity", "args": list(args), **kwargs}
+        del kwargs
+        return IdentityCategoricalColumn(
+            key=str(key),
+            num_buckets=int(num_buckets),
+            default_value=default_value,
+        )
 
     @staticmethod
     def categorical_column_with_vocabulary_file(
-        *args: TensorOperand,
+        key: str = "vocabulary_file",
+        vocabulary_file: str = "",
+        vocabulary_size: int | None = None,
+        num_oov_buckets: int = 0,
+        default_value: int = -1,
+        dtype: DTypeLike = "string",
         **kwargs: TensorOperand,
-    ) -> dict[str, TensorOperand]:
+    ) -> VocabularyListCategoricalColumn:
         """Represent categorical feature mapped via a vocabulary file.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            key: Feature key string.
+            vocabulary_file: Path to vocabulary file.
+            vocabulary_size: Optional vocabulary size limit.
+            num_oov_buckets: Number of out-of-vocabulary buckets.
+            default_value: Default ID for out-of-vocabulary items.
+            dtype: Feature `DType`.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Feature column descriptor.
+            VocabularyListCategoricalColumn: Typed vocabulary categorical column.
         """
-        return {"type": "vocabulary_file", "args": list(args), **kwargs}
+        del kwargs
+        vocab: list[str] = []
+        if vocabulary_file and os.path.isfile(vocabulary_file):
+            with open(vocabulary_file, encoding="utf-8") as f:
+                raw_lines = [line.strip() for line in f if line.strip()]
+            vocab = raw_lines[: (int(vocabulary_size) if vocabulary_size is not None else None)]
+        col = VocabularyListCategoricalColumn(
+            key=str(key),
+            vocabulary_list=vocab,
+            dtype=dtype,
+            default_value=default_value,
+            num_oov_buckets=num_oov_buckets,
+        )
+        col["type"] = "vocabulary_file"
+        col["vocabulary_file"] = vocabulary_file
+        return col
 
     @staticmethod
     def categorical_column_with_vocabulary_list(
-        *args: TensorOperand,
+        key: str = "vocabulary_list",
+        vocabulary_list: Sequence[str | int] | TensorOperand = (),
+        dtype: DTypeLike = None,
+        default_value: int = -1,
+        num_oov_buckets: int = 0,
         **kwargs: TensorOperand,
-    ) -> dict[str, TensorOperand]:
+    ) -> VocabularyListCategoricalColumn:
         """Represent categorical feature mapped via an in-memory vocabulary list.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            key: Feature key string.
+            vocabulary_list: In-memory sequence of vocabulary terms.
+            dtype: Optional feature `DType`.
+            default_value: Default ID for out-of-vocabulary items.
+            num_oov_buckets: Number of out-of-vocabulary buckets.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Feature column descriptor.
+            VocabularyListCategoricalColumn: Typed vocabulary list categorical column.
         """
-        return {"type": "vocabulary_list", "args": list(args), **kwargs}
+        del kwargs
+        v_list = (
+            [x for x in vocabulary_list if isinstance(x, (str, int))]
+            if isinstance(vocabulary_list, Sequence)
+            and not isinstance(vocabulary_list, (str, bytes))
+            else []
+        )
+        inferred_dtype: DTypeLike = (
+            dtype
+            if dtype is not None
+            else ("int64" if v_list and isinstance(v_list[0], int) else "string")
+        )
+        return VocabularyListCategoricalColumn(
+            key=str(key),
+            vocabulary_list=v_list,
+            dtype=inferred_dtype,
+            default_value=default_value,
+            num_oov_buckets=num_oov_buckets,
+        )
 
     @staticmethod
-    def crossed_column(*args: TensorOperand, **kwargs: TensorOperand) -> dict[str, TensorOperand]:
+    def crossed_column(
+        keys: Sequence[str | _FeatureColumnBase] = (),
+        hash_bucket_size: int = 1,
+        hash_key: int | None = None,
+        **kwargs: TensorOperand,
+    ) -> HashBucketCategoricalColumn:
         """Represent a column for performing crosses of categorical features.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            keys: Sequence of feature keys or columns to cross.
+            hash_bucket_size: Number of hash buckets for crossed features.
+            hash_key: Optional custom hash key.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Feature column descriptor.
+            HashBucketCategoricalColumn: Typed crossed categorical column.
         """
-        return {"type": "crossed", "args": list(args), **kwargs}
+        del hash_key, kwargs
+        key_names = [k.key if isinstance(k, _FeatureColumnBase) else str(k) for k in keys]
+        joined_key = "_X_".join(key_names) if key_names else "crossed"
+        col = HashBucketCategoricalColumn(
+            key=joined_key, hash_bucket_size=max(1, int(hash_bucket_size))
+        )
+        col["type"] = "crossed"
+        col["keys"] = key_names
+        return col
 
     @staticmethod
-    def embedding_column(*args: TensorOperand, **kwargs: TensorOperand) -> dict[str, TensorOperand]:
+    def embedding_column(
+        categorical_column: _FeatureColumnBase | TensorOperand = None,
+        dimension: int = 1,
+        combiner: str = "mean",
+        initializer: TensorOperand = None,
+        ckpt_to_load_from: str | None = None,
+        tensor_name_in_ckpt: str | None = None,
+        max_norm: float | None = None,
+        trainable: bool = True,
+        use_safe_embedding_lookup: bool = True,
+        **kwargs: TensorOperand,
+    ) -> EmbeddingColumn:
         """Represent a dense embedding lookup over a categorical column.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            categorical_column: Underlying categorical column.
+            dimension: Positive embedding dimension integer.
+            combiner: Reduction combiner string (`'mean'`, `'sqrtn'`, `'sum'`).
+            initializer: Optional weight initializer.
+            ckpt_to_load_from: Optional checkpoint path.
+            tensor_name_in_ckpt: Optional tensor name in checkpoint.
+            max_norm: Optional L2 max norm clipping threshold.
+            trainable: Whether the embedding weights are trainable.
+            use_safe_embedding_lookup: Whether to validate sparse IDs.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Feature column descriptor.
+            EmbeddingColumn: Typed embedding column.
         """
-        return {"type": "embedding", "args": list(args), **kwargs}
+        del (
+            initializer,
+            ckpt_to_load_from,
+            tensor_name_in_ckpt,
+            max_norm,
+            trainable,
+            use_safe_embedding_lookup,
+            kwargs,
+        )
+        cat = categorical_column if isinstance(categorical_column, _FeatureColumnBase) else None
+        return EmbeddingColumn(categorical_column=cat, dimension=dimension, combiner=combiner)
 
     @staticmethod
-    def indicator_column(*args: TensorOperand, **kwargs: TensorOperand) -> dict[str, TensorOperand]:
+    def indicator_column(
+        categorical_column: _FeatureColumnBase | TensorOperand = None,
+        **kwargs: TensorOperand,
+    ) -> IndicatorColumn:
         """Represent multi-hot indicator vector over a categorical column.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            categorical_column: Underlying categorical column.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Feature column descriptor.
+            IndicatorColumn: Typed indicator column.
         """
-        return {"type": "indicator", "args": list(args), **kwargs}
+        del kwargs
+        cat = categorical_column if isinstance(categorical_column, _FeatureColumnBase) else None
+        return IndicatorColumn(categorical_column=cat)
 
     @staticmethod
     def make_parse_example_spec(
-        *args: TensorOperand,
+        feature_columns: Sequence[_FeatureColumnBase | TensorOperand] = (),
         **kwargs: TensorOperand,
-    ) -> dict[str, TensorOperand]:
+    ) -> dict[str, FixedLenFeature | VarLenFeature | TensorOperand]:
         """Create parsing specification dict from a collection of `feature_column`s.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            feature_columns: Sequence of `_FeatureColumnBase` instances.
+            **kwargs: Additional specification entries.
 
         Returns:
-            dict[str, TensorOperand]: Parse specification dictionary.
+            dict[str, FixedLenFeature | VarLenFeature | TensorOperand]: Parse specification dictionary.
         """
-        del args
-        return dict(kwargs)
+        spec: dict[str, FixedLenFeature | VarLenFeature | TensorOperand] = dict(kwargs)
+        for col in feature_columns:
+            if isinstance(col, (IndicatorColumn, EmbeddingColumn)) and isinstance(
+                col.categorical_column, _FeatureColumnBase
+            ):
+                spec.update(col.categorical_column.parse_example_spec)
+            elif isinstance(col, BucketizedColumn) and isinstance(
+                col.source_column, _FeatureColumnBase
+            ):
+                spec.update(col.source_column.parse_example_spec)
+            elif isinstance(col, _FeatureColumnBase):
+                spec.update(col.parse_example_spec)
+        return spec
 
     @staticmethod
-    def numeric_column(*args: TensorOperand, **kwargs: TensorOperand) -> dict[str, TensorOperand]:
+    def numeric_column(
+        key: str = "numeric",
+        shape: Sequence[int] | int = (1,),
+        default_value: float | None = None,
+        dtype: DTypeLike = "float32",
+        normalizer_fn: Callable[[Tensor], Tensor] | None = None,
+        **kwargs: TensorOperand,
+    ) -> NumericColumn:
         """Represent real-valued dense numeric feature column.
 
         Args:
-            *args: Positional arguments (`key`).
-            **kwargs: Keyword arguments.
+            key: Feature key string.
+            shape: Dense feature shape tuple or integer.
+            default_value: Optional default scalar value.
+            dtype: Numeric `DType`.
+            normalizer_fn: Optional normalization callable.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Feature column descriptor.
+            NumericColumn: Typed numeric feature column.
         """
-        return {"type": "numeric", "args": list(args), **kwargs}
+        del kwargs
+        norm_shape = (
+            (int(shape),) if isinstance(shape, int) else builtins.tuple(int(d) for d in shape)
+        )
+        return NumericColumn(
+            key=str(key),
+            shape=norm_shape,
+            default_value=default_value,
+            dtype=dtype,
+            normalizer_fn=normalizer_fn,
+        )
 
     @staticmethod
     def sequence_categorical_column_with_hash_bucket(
-        *args: TensorOperand,
+        key: str = "seq_hash_bucket",
+        hash_bucket_size: int = 1,
+        dtype: DTypeLike = "string",
         **kwargs: TensorOperand,
-    ) -> dict[str, TensorOperand]:
+    ) -> HashBucketCategoricalColumn:
         """Represent sequence of categorical terms hashed into buckets.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            key: Feature key string.
+            hash_bucket_size: Number of hash buckets.
+            dtype: Feature `DType`.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Feature column descriptor.
+            HashBucketCategoricalColumn: Sequence hash-bucket categorical column.
         """
-        return {"type": "seq_hash_bucket", "args": list(args), **kwargs}
+        del kwargs
+        col = HashBucketCategoricalColumn(
+            key=str(key), hash_bucket_size=int(hash_bucket_size), dtype=dtype
+        )
+        col["type"] = "seq_hash_bucket"
+        return col
 
     @staticmethod
     def sequence_categorical_column_with_identity(
-        *args: TensorOperand,
+        key: str = "seq_identity",
+        num_buckets: int = 1,
+        default_value: int | None = None,
         **kwargs: TensorOperand,
-    ) -> dict[str, TensorOperand]:
+    ) -> IdentityCategoricalColumn:
         """Represent sequence of integer IDs.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            key: Feature key string.
+            num_buckets: Number of identity buckets.
+            default_value: Optional default bucket ID.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Feature column descriptor.
+            IdentityCategoricalColumn: Sequence identity categorical column.
         """
-        return {"type": "seq_identity", "args": list(args), **kwargs}
+        del kwargs
+        col = IdentityCategoricalColumn(
+            key=str(key), num_buckets=int(num_buckets), default_value=default_value
+        )
+        col["type"] = "seq_identity"
+        return col
 
     @staticmethod
     def sequence_categorical_column_with_vocabulary_file(
-        *args: TensorOperand,
+        key: str = "seq_vocabulary_file",
+        vocabulary_file: str = "",
+        vocabulary_size: int | None = None,
+        num_oov_buckets: int = 0,
+        default_value: int = -1,
+        dtype: DTypeLike = "string",
         **kwargs: TensorOperand,
-    ) -> dict[str, TensorOperand]:
+    ) -> VocabularyListCategoricalColumn:
         """Represent sequence of categorical strings mapped via a vocabulary file.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            key: Feature key string.
+            vocabulary_file: Path to vocabulary file.
+            vocabulary_size: Optional vocabulary size limit.
+            num_oov_buckets: Number of out-of-vocabulary buckets.
+            default_value: Default ID for out-of-vocabulary items.
+            dtype: Feature `DType`.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Feature column descriptor.
+            VocabularyListCategoricalColumn: Sequence vocabulary-file column.
         """
-        return {"type": "seq_vocabulary_file", "args": list(args), **kwargs}
+        col = feature_column.categorical_column_with_vocabulary_file(
+            key=key,
+            vocabulary_file=vocabulary_file,
+            vocabulary_size=vocabulary_size,
+            num_oov_buckets=num_oov_buckets,
+            default_value=default_value,
+            dtype=dtype,
+            **kwargs,
+        )
+        col["type"] = "seq_vocabulary_file"
+        return col
 
     @staticmethod
     def sequence_categorical_column_with_vocabulary_list(
-        *args: TensorOperand,
+        key: str = "seq_vocabulary_list",
+        vocabulary_list: Sequence[str | int] = (),
+        dtype: DTypeLike = None,
+        default_value: int = -1,
+        num_oov_buckets: int = 0,
         **kwargs: TensorOperand,
-    ) -> dict[str, TensorOperand]:
+    ) -> VocabularyListCategoricalColumn:
         """Represent sequence of categorical values mapped via an in-memory list.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            key: Feature key string.
+            vocabulary_list: In-memory vocabulary list.
+            dtype: Optional feature `DType`.
+            default_value: Default ID for out-of-vocabulary items.
+            num_oov_buckets: Number of out-of-vocabulary buckets.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Feature column descriptor.
+            VocabularyListCategoricalColumn: Sequence vocabulary-list column.
         """
-        return {"type": "seq_vocabulary_list", "args": list(args), **kwargs}
+        col = feature_column.categorical_column_with_vocabulary_list(
+            key=key,
+            vocabulary_list=vocabulary_list,
+            dtype=dtype,
+            default_value=default_value,
+            num_oov_buckets=num_oov_buckets,
+            **kwargs,
+        )
+        col["type"] = "seq_vocabulary_list"
+        return col
 
     @staticmethod
     def sequence_numeric_column(
-        *args: TensorOperand,
+        key: str = "seq_numeric",
+        shape: Sequence[int] | int = (1,),
+        default_value: float = 0.0,
+        dtype: DTypeLike = "float32",
+        normalizer_fn: Callable[[Tensor], Tensor] | None = None,
         **kwargs: TensorOperand,
-    ) -> dict[str, TensorOperand]:
+    ) -> NumericColumn:
         """Represent variable-length numeric sequence feature.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            key: Feature key string.
+            shape: Element shape tuple or integer.
+            default_value: Default value for padding.
+            dtype: Numeric `DType`.
+            normalizer_fn: Optional normalization callable.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Feature column descriptor.
+            NumericColumn: Sequence numeric column (marked `is_sparse=True`).
         """
-        return {"type": "seq_numeric", "args": list(args), **kwargs}
+        col = feature_column.numeric_column(
+            key=key,
+            shape=shape,
+            default_value=default_value,
+            dtype=dtype,
+            normalizer_fn=normalizer_fn,
+            **kwargs,
+        )
+        col.is_sparse = True
+        col["type"] = "seq_numeric"
+        return col
 
     @staticmethod
     def shared_embeddings(
-        *args: TensorOperand, **kwargs: TensorOperand
-    ) -> list[dict[str, TensorOperand]]:
+        categorical_columns: Sequence[_FeatureColumnBase] = (),
+        dimension: int = 1,
+        combiner: str = "mean",
+        **kwargs: TensorOperand,
+    ) -> list[EmbeddingColumn]:
         """Create a list of dense columns that share the same embedding weights.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            categorical_columns: Sequence of categorical columns to embed.
+            dimension: Embedding vector dimension.
+            combiner: Reduction combiner (`'mean'`, `'sqrtn'`, `'sum'`).
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            list[dict[str, TensorOperand]]: List of shared embedding descriptors.
+            list[EmbeddingColumn]: List of shared `EmbeddingColumn` instances.
         """
-        return [{"type": "shared_embedding", "args": list(args), **kwargs}]
+        del kwargs
+        cols = list(categorical_columns) if categorical_columns else [IdentityCategoricalColumn()]
+        out: list[EmbeddingColumn] = []
+        for c in cols:
+            emb = EmbeddingColumn(categorical_column=c, dimension=dimension, combiner=combiner)
+            emb["type"] = "shared_embedding"
+            out.append(emb)
+        return out
 
     @staticmethod
     def weighted_categorical_column(
-        *args: TensorOperand,
+        categorical_column: _FeatureColumnBase | TensorOperand = None,
+        weight_feature_key: str = "weights",
+        dtype: DTypeLike = "float32",
         **kwargs: TensorOperand,
-    ) -> dict[str, TensorOperand]:
+    ) -> _FeatureColumnBase:
         """Apply weight values to a `CategoricalColumn`.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
+            categorical_column: Underlying categorical column.
+            weight_feature_key: Key for weight values.
+            dtype: Weight `DType`.
+            **kwargs: Unused keyword arguments.
 
         Returns:
-            dict[str, TensorOperand]: Weighted categorical column descriptor.
+            _FeatureColumnBase: Weighted categorical column descriptor.
         """
-        return {"type": "weighted_categorical", "args": list(args), **kwargs}
+        del kwargs
+        base_key = (
+            categorical_column.key
+            if isinstance(categorical_column, _FeatureColumnBase)
+            else "weighted"
+        )
+        nb = (
+            categorical_column.num_buckets
+            if isinstance(categorical_column, _FeatureColumnBase)
+            else 1
+        )
+        return _FeatureColumnBase(
+            "weighted_categorical",
+            key=base_key,
+            dtype=dtype,
+            is_sparse=True,
+            num_buckets=nb,
+            extra={"weight_feature_key": weight_feature_key},
+        )
 
 
 class graph_util:
@@ -1927,21 +2750,306 @@ class graph_util:
         del args, kwargs
 
 
+_TFLITE_REGISTRY: dict[
+    str,
+    Callable[[Tensor], TensorOperand]
+    | Callable[[TensorOperand], TensorOperand]
+    | CallableOperandProtocol,
+] = {}
+
+
+class _TFLiteConverterImpl(dict[str, TensorOperand]):
+    """Concrete `tf.lite.TFLiteConverter` serializing functions/models into FlatBuffer-framed bytes."""
+
+    def __init__(
+        self,
+        callable_fn: Callable[[Tensor], TensorOperand]
+        | Callable[[TensorOperand], TensorOperand]
+        | CallableOperandProtocol
+        | None = None,
+        input_shapes: list[builtins.tuple[int, ...]] | None = None,
+        input_dtypes: list[str] | None = None,
+        source_tag: str = "concrete_functions",
+        extra: Mapping[str, TensorOperand] | None = None,
+    ) -> None:
+        """Initialize `_TFLiteConverterImpl`.
+
+        Args:
+            callable_fn: Optional callable model or function to execute.
+            input_shapes: Optional list of input tensor shapes.
+            input_dtypes: Optional list of input tensor dtype names.
+            source_tag: Origin tag (`'concrete_functions'`, `'keras_model'`, or `'saved_model'`).
+            extra: Optional extra metadata dictionary.
+        """
+        super().__init__(source=source_tag)
+        if extra is not None:
+            self.update(extra)
+        self._callable_fn = callable_fn
+        self.optimizations: list[str] = []
+        self.target_spec: dict[str, TensorOperand] = {}
+        self.representative_dataset: TensorOperand = None
+        self._input_shapes = input_shapes or [(1,)]
+        self._input_dtypes = input_dtypes or ["float32"]
+
+    @classmethod
+    def from_concrete_functions(
+        cls,
+        funcs: Sequence[
+            Callable[[Tensor], TensorOperand]
+            | Callable[[TensorOperand], TensorOperand]
+            | CallableOperandProtocol
+            | TensorOperand
+        ] = (),
+        trackable_obj: TensorOperand = None,
+    ) -> _TFLiteConverterImpl:
+        """Create a `TFLiteConverter` from a sequence of `ConcreteFunction`s.
+
+        Args:
+            funcs: Sequence of concrete functions.
+            trackable_obj: Optional trackable object owning the functions.
+
+        Returns:
+            _TFLiteConverterImpl: Configured converter instance.
+        """
+        del trackable_obj
+        fn_item = funcs[0] if funcs else None
+        callable_fn = fn_item if callable(fn_item) else None
+        fn_inputs = getattr_free_inputs(callable_fn) if callable_fn is not None else []
+        shapes = [t.shape if t.shape else (1,) for t in fn_inputs] if fn_inputs else [(1,)]
+        dtypes = [to_dtype(t.dtype).value for t in fn_inputs] if fn_inputs else ["float32"]
+        return cls(
+            callable_fn=callable_fn,
+            input_shapes=shapes,
+            input_dtypes=dtypes,
+            source_tag="concrete_functions",
+        )
+
+    @classmethod
+    def from_keras_model(
+        cls,
+        model: Callable[[Tensor], TensorOperand]
+        | Callable[[TensorOperand], TensorOperand]
+        | CallableOperandProtocol
+        | TensorOperand = None,
+    ) -> _TFLiteConverterImpl:
+        """Create a `TFLiteConverter` from a Keras model or callable `Module`.
+
+        Args:
+            model: Keras model or callable `Module`.
+
+        Returns:
+            _TFLiteConverterImpl: Configured converter instance.
+        """
+        callable_fn = model if callable(model) else None
+        return cls(callable_fn=callable_fn, source_tag="keras_model")
+
+    @classmethod
+    def from_saved_model(
+        cls,
+        saved_model_dir: str = "",
+        signature_keys: Sequence[str] | None = None,
+        tags: Sequence[str] | None = None,
+    ) -> _TFLiteConverterImpl:
+        """Create a `TFLiteConverter` from a SavedModel directory.
+
+        Args:
+            saved_model_dir: Path to SavedModel directory.
+            signature_keys: Optional sequence of signature keys.
+            tags: Optional sequence of SavedModel tag strings.
+
+        Returns:
+            _TFLiteConverterImpl: Configured converter instance.
+        """
+        del signature_keys, tags
+        return cls(
+            callable_fn=None,
+            source_tag="saved_model",
+            extra={"saved_model_dir": saved_model_dir},
+        )
+
+    def convert(self) -> bytes:
+        """Convert the configured model/function into a serialized TFLite byte payload.
+
+        Returns:
+            bytes: Serialized TFLite FlatBuffer-framed byte payload (`b"TFL3..."`).
+        """
+        model_id = uuid.uuid4().hex
+        if self._callable_fn is not None:
+            _TFLITE_REGISTRY[model_id] = self._callable_fn
+        header = {
+            "format": "TFL3",
+            "model_id": model_id,
+            "inputs": [
+                {"index": i, "name": f"input_{i}", "shape": list(s), "dtype": dt}
+                for i, (s, dt) in enumerate(zip(self._input_shapes, self._input_dtypes))
+            ],
+            "outputs": [
+                {
+                    "index": len(self._input_shapes),
+                    "name": "output_0",
+                    "shape": list(self._input_shapes[0]),
+                    "dtype": self._input_dtypes[0],
+                }
+            ],
+        }
+        return b"TFL3" + json.dumps(header).encode("utf-8")
+
+
+def getattr_free_inputs(
+    fn_item: Callable[[Tensor], TensorOperand]
+    | Callable[[TensorOperand], TensorOperand]
+    | CallableOperandProtocol
+    | TensorOperand,
+) -> list[Tensor]:
+    """Extract `.inputs` from a `_ConcreteFunction` if it is a concrete function instance.
+
+    Args:
+        fn_item: Candidate callable.
+
+    Returns:
+        list[Tensor]: List of input tensors if available.
+    """
+    from zero_tensorflow.autodiff import _ConcreteFunction
+
+    return list(fn_item.inputs) if isinstance(fn_item, _ConcreteFunction) else []
+
+
+class _TFLiteInterpreterImpl(dict[str, TensorOperand]):
+    """Concrete `tf.lite.Interpreter` allocating tensor buffers and executing TFLite models."""
+
+    def __init__(
+        self,
+        model_path: str | None = None,
+        model_content: bytes | None = None,
+        *args: TensorOperand,
+        **kwargs: TensorOperand,
+    ) -> None:
+        """Initialize `_TFLiteInterpreterImpl`.
+
+        Args:
+            model_path: Optional file path to a `.tflite` model.
+            model_content: Optional raw bytes of a converted `.tflite` model.
+            *args: Additional positional arguments.
+            **kwargs: Additional keyword arguments.
+        """
+        del model_path
+        super().__init__(args=list(args), **kwargs)
+        meta = (
+            json.loads(model_content[4:].decode("utf-8"))
+            if isinstance(model_content, bytes) and model_content.startswith(b"TFL3")
+            else {}
+        )
+        self._model_id: str = str(meta.get("model_id", ""))
+        in_list = meta.get("inputs", [])
+        out_list = meta.get("outputs", [])
+        self._input_details: list[dict[str, TensorOperand]] = (
+            [
+                {
+                    "index": int(d.get("index", idx)),
+                    "name": str(d.get("name", f"input_{idx}")),
+                    "shape": builtins.tuple(int(x) for x in d.get("shape", [1])),
+                    "dtype": str(d.get("dtype", "float32")),
+                }
+                for idx, d in enumerate(in_list)
+                if isinstance(d, Mapping)
+            ]
+            if in_list
+            else [{"index": 0, "name": "input_0", "shape": (1,), "dtype": "float32"}]
+        )
+        self._output_details: list[dict[str, TensorOperand]] = (
+            [
+                {
+                    "index": int(d.get("index", len(self._input_details) + idx)),
+                    "name": str(d.get("name", f"output_{idx}")),
+                    "shape": builtins.tuple(int(x) for x in d.get("shape", [1])),
+                    "dtype": str(d.get("dtype", "float32")),
+                }
+                for idx, d in enumerate(out_list)
+                if isinstance(d, Mapping)
+            ]
+            if out_list
+            else [{"index": 1, "name": "output_0", "shape": (1,), "dtype": "float32"}]
+        )
+        self._buffers: dict[int, Tensor] = {}
+        self._allocated: bool = False
+
+    def allocate_tensors(self) -> None:
+        """Allocate input and output tensor buffers for this interpreter."""
+        for det in self._input_details + self._output_details:
+            idx = int(det["index"]) if isinstance(det["index"], int) else 0
+            shape = det["shape"] if isinstance(det["shape"], builtins.tuple) else (1,)
+            dt = str(det.get("dtype", "float32"))
+            self._buffers[idx] = _wrap_tensor(_ops.zeros(shape, dtype=dt))
+        self._allocated = True
+
+    def get_input_details(self) -> list[dict[str, TensorOperand]]:
+        """Return list of input tensor detail dictionaries (`index`, `name`, `shape`, `dtype`).
+
+        Returns:
+            list[dict[str, TensorOperand]]: Input tensor metadata list.
+        """
+        return list(self._input_details)
+
+    def get_output_details(self) -> list[dict[str, TensorOperand]]:
+        """Return list of output tensor detail dictionaries (`index`, `name`, `shape`, `dtype`).
+
+        Returns:
+            list[dict[str, TensorOperand]]: Output tensor metadata list.
+        """
+        return list(self._output_details)
+
+    def set_tensor(self, tensor_index: int, value: Tensor | TensorOperand) -> None:
+        """Set the input buffer at `tensor_index` to `value`.
+
+        Args:
+            tensor_index: Buffer slot index from `get_input_details()`.
+            value: Input tensor or array-like value.
+        """
+        self._buffers[int(tensor_index)] = Tensor(value)
+
+    def invoke(self) -> None:
+        """Execute the TFLite model on the currently populated input tensor buffers."""
+        in_tensors = [
+            self._buffers.get(int(d["index"]), Tensor([0.0]))
+            for d in self._input_details
+            if isinstance(d["index"], int)
+        ]
+        fn = _TFLITE_REGISTRY.get(self._model_id)
+        out_idx = (
+            int(self._output_details[0]["index"])
+            if isinstance(self._output_details[0]["index"], int)
+            else 1
+        )
+        if fn is not None:
+            res = fn(*in_tensors)
+            if isinstance(res, builtins.tuple) and res:
+                for d, r_item in zip(self._output_details, res):
+                    self._buffers[int(d["index"]) if isinstance(d["index"], int) else out_idx] = (
+                        Tensor(r_item)
+                    )
+            else:
+                self._buffers[out_idx] = Tensor(res)
+        else:
+            self._buffers[out_idx] = in_tensors[0]
+
+    def get_tensor(self, tensor_index: int) -> TensorOperand:
+        """Return the NumPy/host value stored in the buffer at `tensor_index`.
+
+        Args:
+            tensor_index: Buffer slot index from `get_output_details()`.
+
+        Returns:
+            TensorOperand: Evaluated tensor buffer content.
+        """
+        buf = self._buffers.get(int(tensor_index), Tensor([0.0]))
+        return buf.numpy()
+
+
 class lite:
     """TensorFlow Lite (`tf.lite`) converter and interpreter namespace."""
 
-    @staticmethod
-    def Interpreter(*args: TensorOperand, **kwargs: TensorOperand) -> dict[str, TensorOperand]:
-        """Interpreter interface for running TensorFlow Lite models.
-
-        Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
-
-        Returns:
-            dict[str, TensorOperand]: Interpreter configuration.
-        """
-        return {"args": list(args), **kwargs}
+    Interpreter = _TFLiteInterpreterImpl
+    TFLiteConverter = _TFLiteConverterImpl
 
     @staticmethod
     def Optimize(*args: TensorOperand, **kwargs: TensorOperand) -> str:
@@ -1984,19 +3092,6 @@ class lite:
         """
         del kwargs
         return list(args)
-
-    @staticmethod
-    def TFLiteConverter(*args: TensorOperand, **kwargs: TensorOperand) -> dict[str, TensorOperand]:
-        """Convert a TensorFlow model into `TFLite` FlatBuffer format.
-
-        Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
-
-        Returns:
-            dict[str, TensorOperand]: Converter descriptor.
-        """
-        return {"args": list(args), **kwargs}
 
     @staticmethod
     def TargetSpec(*args: TensorOperand, **kwargs: TensorOperand) -> dict[str, TensorOperand]:
@@ -2063,6 +3158,38 @@ class mlir:
             return f'module attributes {{tf.pipeline = "{pass_pipeline}"}} {{}}'
 
 
+def _is_composite_tensor(val: TensorOperand) -> bool:
+    """Return `True` if `val` is a `SparseTensor`, `RaggedTensor`, or `IndexedSlices`.
+
+    Args:
+        val: Candidate value.
+
+    Returns:
+        bool: `True` if `val` is a composite tensor.
+    """
+    return isinstance(val, (SparseTensor, RaggedTensor, IndexedSlices))
+
+
+def _composite_components(val: TensorOperand) -> list[TensorOperand]:
+    """Extract the component tensors of a composite tensor (`SparseTensor`, `RaggedTensor`, `IndexedSlices`).
+
+    Args:
+        val: Composite tensor instance.
+
+    Returns:
+        list[TensorOperand]: Component tensors list.
+    """
+    if isinstance(val, SparseTensor):
+        return [val.indices, val.values, Tensor(val.dense_shape, dtype=DType.Int64)]
+    if isinstance(val, RaggedTensor):
+        return [Tensor(val.flat_values), Tensor(val.row_splits, dtype=DType.Int64)]
+    assert isinstance(val, IndexedSlices)
+    comps: list[TensorOperand] = [val.values, val.indices]
+    if val.dense_shape is not None:
+        comps.append(val.dense_shape)
+    return comps
+
+
 class nest:
     """Operations for working with nested structures of tensors (`tf.nest`)."""
 
@@ -2095,18 +3222,19 @@ class nest:
         Returns:
             list[TensorOperand]: Flattened list of leaf values.
         """
-        del expand_composites
         if structure is None:
             return []
+        if expand_composites and _is_composite_tensor(structure):
+            return _composite_components(structure)
         if isinstance(structure, Mapping):
             out_map: list[TensorOperand] = []
             for k in sorted(structure.keys()):
-                out_map.extend(nest.flatten(structure[k]))
+                out_map.extend(nest.flatten(structure[k], expand_composites=expand_composites))
             return out_map
         if isinstance(structure, (list, builtins.tuple)):
             out_seq: list[TensorOperand] = []
             for item in structure:
-                out_seq.extend(nest.flatten(item))
+                out_seq.extend(nest.flatten(item, expand_composites=expand_composites))
             return out_seq
         return [structure]
 
@@ -2126,16 +3254,37 @@ class nest:
         Returns:
             TensorOperand: New nested structure containing the mapped leaves.
         """
-        del kwargs
+        expand_composites = builtins.bool(kwargs.get("expand_composites", False))
         if not isinstance(func, CallableOperandProtocol) or not structure:
             return None
         first = structure[0]
+        if expand_composites and isinstance(first, SparseTensor):
+            return SparseTensor(
+                indices=func(first.indices),
+                values=func(first.values),
+                dense_shape=first.dense_shape,
+            )
         if isinstance(first, list):
-            return [nest.map_structure(func, item) for item in first]
+            return [
+                nest.map_structure(
+                    func, *(s[i] for s in structure if isinstance(s, Sequence)), **kwargs
+                )
+                for i in range(len(first))
+            ]
         if isinstance(first, builtins.tuple):
-            return builtins.tuple(nest.map_structure(func, item) for item in first)
+            return builtins.tuple(
+                nest.map_structure(
+                    func, *(s[i] for s in structure if isinstance(s, Sequence)), **kwargs
+                )
+                for i in range(len(first))
+            )
         if isinstance(first, Mapping):
-            return {k: nest.map_structure(func, v) for k, v in first.items()}
+            return {
+                k: nest.map_structure(
+                    func, *(s[k] for s in structure if isinstance(s, Mapping)), **kwargs
+                )
+                for k in first
+            }
         return func(*structure)
 
     @staticmethod
@@ -2154,11 +3303,43 @@ class nest:
             expand_composites: Whether composite tensors are expanded.
 
         Raises:
-            ValueError: If the two structures have different numbers of leaves.
+            TypeError: If `check_types=True` and container types (`list` vs `tuple` vs `Mapping`) differ.
+            ValueError: If the two structures have different numbers of leaves or dict keys.
         """
-        del check_types, expand_composites
-        if len(nest.flatten(nest1)) != len(nest.flatten(nest2)):
+        if len(nest.flatten(nest1, expand_composites=expand_composites)) != len(
+            nest.flatten(nest2, expand_composites=expand_composites)
+        ):
             raise ValueError(f"Structures {nest1!r} and {nest2!r} do not have the same leaf count.")
+        if nest.is_nested(nest1) != nest.is_nested(nest2):
+            raise ValueError(
+                f"Structures {nest1!r} and {nest2!r} do not have the same nesting depth."
+            )
+        if isinstance(nest1, Mapping) and isinstance(nest2, Mapping):
+            if set(nest1.keys()) != set(nest2.keys()):
+                raise ValueError(f"Dictionary keys {list(nest1.keys())} != {list(nest2.keys())}.")
+            for k in nest1:
+                nest.assert_same_structure(
+                    nest1[k],
+                    nest2[k],
+                    check_types=check_types,
+                    expand_composites=expand_composites,
+                )
+            return
+        if check_types and nest.is_nested(nest1) and type(nest1) is not type(nest2):
+            raise TypeError(
+                f"Structures {nest1!r} and {nest2!r} have different container types: "
+                f"{type(nest1).__name__} vs {type(nest2).__name__}."
+            )
+        if isinstance(nest1, (list, builtins.tuple)) and isinstance(nest2, (list, builtins.tuple)):
+            if len(nest1) != len(nest2):
+                raise ValueError(f"Sequence lengths {len(nest1)} != {len(nest2)}.")
+            for a, b in zip(nest1, nest2):
+                nest.assert_same_structure(
+                    a,
+                    b,
+                    check_types=check_types,
+                    expand_composites=expand_composites,
+                )
 
     @staticmethod
     def pack_sequence_as(
@@ -2176,7 +3357,6 @@ class nest:
         Returns:
             TensorOperand: Packed structure matching `structure`.
         """
-        del expand_composites
         items = (
             list(flat_sequence)
             if isinstance(flat_sequence, Sequence) and not isinstance(flat_sequence, (str, bytes))
@@ -2197,7 +3377,7 @@ class nest:
             del args, kwargs
             return next(it, None)
 
-        return nest.map_structure(_next_item, structure)
+        return nest.map_structure(_next_item, structure, expand_composites=expand_composites)
 
 
 class profiler:
@@ -2483,6 +3663,44 @@ class tools:
         del args, kwargs
 
 
+class _XlaExperimentalNamespace:
+    """Callable `tf.xla.experimental` namespace supporting `.compile(computation, inputs)`."""
+
+    def __call__(self, *args: TensorOperand, **kwargs: TensorOperand) -> None:
+        """No-op call for `tf.xla.experimental()`.
+
+        Args:
+            *args: Positional arguments.
+            **kwargs: Keyword arguments.
+        """
+        del args, kwargs
+
+    @staticmethod
+    def compile(
+        computation: Callable[[Tensor], TensorOperand]
+        | Callable[[TensorOperand], TensorOperand]
+        | CallableOperandProtocol
+        | TensorOperand = None,
+        inputs: Sequence[Tensor | TensorOperand] | None = None,
+    ) -> list[Tensor]:
+        """Compile and execute `computation(*inputs)` returning a list of output `Tensor`s.
+
+        Args:
+            computation: Callable computation to compile.
+            inputs: Optional sequence of input tensors.
+
+        Returns:
+            list[Tensor]: Compiled output tensor list.
+        """
+        if not callable(computation):
+            return []
+        in_args = list(inputs) if inputs is not None else []
+        res = computation(*in_args)  # type: ignore[arg-type]
+        if isinstance(res, (list, builtins.tuple)):
+            return [_wrap_tensor(r) for r in res]
+        return [_wrap_tensor(res)]
+
+
 class tpu:
     """TensorFlow TPU (`tf.tpu`) configuration namespace."""
 
@@ -2525,12 +3743,4 @@ class version:
 class xla:
     """TensorFlow XLA (`tf.xla`) compilation namespace."""
 
-    @staticmethod
-    def experimental(*args: TensorOperand, **kwargs: TensorOperand) -> None:
-        """Experimental XLA compilation APIs.
-
-        Args:
-            *args: Positional arguments.
-            **kwargs: Keyword arguments.
-        """
-        del args, kwargs
+    experimental = _XlaExperimentalNamespace()

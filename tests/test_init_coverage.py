@@ -334,16 +334,16 @@ def test_control_flow_ops_behavioral() -> None:
 
     assert tf.map_fn(None, Tensor([1.0])) is None
     mf_empty = tf.map_fn(_double_tensor, Tensor([]))
-    assert mf_empty is not None and mf_empty.shape == (0,)
+    assert isinstance(mf_empty, Tensor) and mf_empty.shape == (0,)
     mapped = tf.map_fn(_double_tensor, Tensor([1.0, 2.0, 3.0]))
-    assert mapped is not None
+    assert isinstance(mapped, Tensor)
     debugging.assert_near(mapped, [2.0, 4.0, 6.0])
     mapped_seq = tf.map_fn(_inc_tensor, [Tensor(3.0), Tensor(4.0)])
-    assert mapped_seq is not None
+    assert isinstance(mapped_seq, Tensor)
     debugging.assert_near(mapped_seq, [4.0, 5.0])
 
     vmap = tf.vectorized_map(_triple_tensor, Tensor([1.0, 2.0]))
-    assert vmap is not None
+    assert isinstance(vmap, Tensor)
     debugging.assert_near(vmap, [3.0, 6.0])
 
     with tf.name_scope("scope_a"), tf.name_scope("scope_b"):
@@ -460,6 +460,210 @@ def test_control_flow_ops_behavioral() -> None:
     tf.nest.assert_same_structure({"a": 1}, {"a": 2})
     with pytest.raises(ValueError, match="do not have the same leaf count"):
         tf.nest.assert_same_structure([1, 2], [1])
+    with pytest.raises(ValueError, match="same nesting depth"):
+        tf.nest.assert_same_structure([1], 1)
+    with pytest.raises(ValueError, match="Dictionary keys"):
+        tf.nest.assert_same_structure({"a": 1}, {"b": 1})
+    with pytest.raises(TypeError, match="different container types"):
+        tf.nest.assert_same_structure([1, 2], (1, 2), check_types=True)
+    with pytest.raises(ValueError, match="Sequence lengths"):
+        tf.nest.assert_same_structure([[1, 2]], [[1], [2]])
+
+    sp_c = tf.SparseTensor([[0, 0]], [1.0], [2, 2])
+    rg_c = tf.RaggedTensor([[1, 2], [3]])
+    is_c = tf.IndexedSlices(Tensor([1.0]), Tensor([0]), dense_shape=Tensor([2]))
+    assert len(tf.nest.flatten(sp_c, expand_composites=True)) == 3
+    assert len(tf.nest.flatten(rg_c, expand_composites=True)) == 2
+    assert len(tf.nest.flatten(is_c, expand_composites=True)) == 3
+    assert (
+        len(tf.nest.flatten(tf.IndexedSlices(Tensor([1.0]), Tensor([0])), expand_composites=True))
+        == 2
+    )
+    assert isinstance(
+        tf.nest.map_structure(_identity_op, sp_c, expand_composites=True),
+        tf.SparseTensor,
+    )
+
+    with pytest.raises(ValueError, match="exclusive case"):
+        tf.case([(True, lambda: Tensor(1.0)), (True, lambda: Tensor(2.0))], exclusive=True)
+    with pytest.raises(ValueError, match="strict case"):
+        tf.case([(False, lambda: Tensor(1.0))], strict=True, default=None)
+    sw_clamped = tf.switch_case(99, [lambda: Tensor(10.0), lambda: Tensor(20.0)], default=None)
+    assert isinstance(sw_clamped, Tensor) and sw_clamped.numpy() == 20.0
+
+    with pytest.raises(ValueError, match="not compatible with shape_invariant"):
+        tf.while_loop(
+            _while_cond_1d,
+            _while_body_add1,
+            Tensor([1, 2]),
+            shape_invariants=tf.TensorShape([3]),
+        )
+    wl_inv = tf.while_loop(
+        _while_cond_1d,
+        _while_body_add2,
+        Tensor(1),
+        shape_invariants=[tf.TensorShape([]), None],
+    )
+    assert isinstance(wl_inv, Tensor) and wl_inv.numpy() == 5
+
+    @tf.function
+    def _traced_cf(a: Tensor) -> Tensor:
+        """Trace `cond` and `while_loop` inside `@tf.function`.
+
+        Args:
+            a: Input tensor.
+
+        Returns:
+            Tensor: Conditional loop result.
+        """
+        c_res = tf.cond(Tensor(True), lambda: a + 1.0, lambda: a + 2.0)
+        _ = tf.cond(Tensor(True), lambda: (a, a), lambda: (a, a))
+        w_res = tf.while_loop(_while_cond_1d, _while_body_add1, c_res)
+        return Tensor(w_res)
+
+    _ = _traced_cf(Tensor(1.0))
+
+    def _map_dict_fn(*args: TensorOperand, **kwargs: TensorOperand) -> TensorOperand:
+        """Double dict entry `'a'`.
+
+        Args:
+            *args: Input dict slice.
+            **kwargs: Unused keyword arguments.
+
+        Returns:
+            TensorOperand: Mapped dict.
+        """
+        del kwargs
+        d = args[0]
+        assert isinstance(d, dict)
+        return {"out": Tensor(d["a"]) * 2.0}
+
+    def _map_pair_fn(*args: TensorOperand, **kwargs: TensorOperand) -> TensorOperand:
+        """Sum tuple pair.
+
+        Args:
+            *args: Input pair slice.
+            **kwargs: Unused keyword arguments.
+
+        Returns:
+            TensorOperand: Single-element list.
+        """
+        del kwargs
+        p = args[0]
+        assert isinstance(p, tuple)
+        return [Tensor(p[0]) + Tensor(p[1])]
+
+    def _map_tup_fn(x: Tensor) -> tuple[Tensor, Tensor]:
+        """Return `(x, x * 2.0)`.
+
+        Args:
+            x: Input tensor.
+
+        Returns:
+            tuple[Tensor, Tensor]: Pair of tensors.
+        """
+        return (x, x * 2.0)
+
+    assert tf.map_fn(_map_dict_fn, {"a": Tensor([1.0, 2.0])}) is not None
+    assert tf.map_fn(_map_pair_fn, (Tensor([1.0, 2.0]), Tensor([3.0, 4.0]))) is not None
+    assert tf.map_fn(_map_tup_fn, Tensor([1.0, 2.0])) is not None
+
+    # Feature columns verification
+    num_col = tf.feature_column.numeric_column("age", shape=1, normalizer_fn=lambda t: t * 2.0)
+    assert num_col.name == "age"
+    debugging.assert_near(num_col.transform_feature({"age": [10.0, 20.0]}), [20.0, 40.0])
+    buck_col = tf.feature_column.bucketized_column(num_col, boundaries=[15.0, 30.0])
+    debugging.assert_equal(buck_col.transform_feature({"age": [5.0, 10.0, 20.0]}), [0, 1, 2])
+    assert tf.feature_column.bucketized_column(None, boundaries="bad").transform_feature(
+        {"bucketized": [1.0]}
+    ).shape == (1,)
+    id_col = tf.feature_column.categorical_column_with_identity("id_feat", num_buckets=4)
+    vlist_col = tf.feature_column.categorical_column_with_vocabulary_list(
+        "color", ["red", "blue"], num_oov_buckets=2
+    )
+    assert vlist_col.transform_feature({"color": ["red", "green"]}).shape == (2,)
+    vlist_def = tf.feature_column.categorical_column_with_vocabulary_list(
+        "num_id", [10, 20], num_oov_buckets=0, default_value=-1
+    )
+    debugging.assert_equal(vlist_def.transform_feature({"num_id": [10, 99]}), [0, -1])
+    assert (
+        tf.feature_column.categorical_column_with_vocabulary_list("empty", "bad").num_buckets == 1
+    )
+    hb_col = tf.feature_column.categorical_column_with_hash_bucket("tag", hash_bucket_size=8)
+    assert hb_col.transform_feature({"tag": ["a", "b"]}).shape == (2,)
+    ind_col = tf.feature_column.indicator_column(id_col)
+    debugging.assert_near(
+        ind_col.transform_feature({"id_feat": [1, 3]}), [[0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+    )
+    assert tf.feature_column.indicator_column(None).transform_feature({}).shape == (1, 1)
+    emb_col = tf.feature_column.embedding_column(id_col, dimension=2)
+    assert emb_col.transform_feature({"id_feat": [0, 1]}).shape == (2, 2)
+    assert tf.feature_column.embedding_column(None, dimension=2).transform_feature({}).shape == (
+        1,
+        2,
+    )
+    cross_col = tf.feature_column.crossed_column([num_col, "tag"], hash_bucket_size=4)
+    assert cross_col.key == "age_X_tag"
+    parse_spec = tf.feature_column.make_parse_example_spec(
+        [num_col, id_col, ind_col, buck_col, "ignored"]
+    )
+    assert "age" in parse_spec and "id_feat" in parse_spec
+    assert len(tf.feature_column.shared_embeddings([id_col], dimension=2)) == 1
+    assert tf.feature_column.weighted_categorical_column(id_col, "w").is_sparse is True
+    vf_col = tf.feature_column.categorical_column_with_vocabulary_file(
+        "vf", "dummy_file", vocabulary_size=2
+    )
+    assert vf_col["type"] == "vocabulary_file"
+
+    # TFLite converter & interpreter verification
+    @tf.function
+    def _tflite_double(x: Tensor) -> Tensor:
+        """Double input tensor `x`.
+
+        Args:
+            x: Input tensor.
+
+        Returns:
+            Tensor: `x * 2.0`.
+        """
+        return x * 2.0
+
+    cf_tflite = _tflite_double.get_concrete_function(Tensor([3.0, 4.0]))
+    conv = tf.lite.TFLiteConverter.from_concrete_functions([cf_tflite])
+    tflite_bytes = conv.convert()
+    assert tflite_bytes.startswith(b"TFL3")
+    interp = tf.lite.Interpreter(model_content=tflite_bytes)
+    interp.allocate_tensors()
+    in_det = interp.get_input_details()
+    out_det = interp.get_output_details()
+    in_idx = in_det[0]["index"]
+    out_idx = out_det[0]["index"]
+    assert isinstance(in_idx, int) and isinstance(out_idx, int)
+    interp.set_tensor(in_idx, Tensor([5.0, 6.0]))
+    interp.invoke()
+    debugging.assert_near(Tensor(interp.get_tensor(out_idx)), [10.0, 12.0])
+
+    conv_k = tf.lite.TFLiteConverter.from_keras_model(lambda x: (x + 1.0,))
+    interp_k = tf.lite.Interpreter(model_content=conv_k.convert())
+    interp_k.allocate_tensors()
+    interp_k.set_tensor(0, Tensor([2.0]))
+    interp_k.invoke()
+    debugging.assert_near(Tensor(interp_k.get_tensor(1)), [3.0])
+
+    conv_s = tf.lite.TFLiteConverter.from_saved_model("/tmp/nonexistent_sm")
+    interp_s = tf.lite.Interpreter(model_content=conv_s.convert())
+    interp_s.allocate_tensors()
+    interp_s.set_tensor(0, Tensor([9.0]))
+    interp_s.invoke()
+    debugging.assert_near(Tensor(interp_s.get_tensor(1)), [9.0])
+
+    # XLA compile & TPU XLAOptions verification
+    xla_out = tf.xla.experimental.compile(lambda a: a * 3.0, [Tensor(4.0)])
+    assert len(xla_out) == 1 and xla_out[0].numpy() == 12.0
+    xla_tup = tf.xla.experimental.compile(lambda a: (a, a + 1.0), [Tensor(2.0)])
+    assert len(xla_tup) == 2
+    assert tf.xla.experimental.compile(None) == []
+    assert isinstance(tf.tpu.XLAOptions(enable_xla=True), dict)
     assert tf.nest.flatten(None) == []
     assert tf.nest.flatten([1, [2, (3, 4)]]) == [1, 2, 3, 4]
     assert tf.nest.flatten({"b": 2, "a": 1}) == [1, 2]
@@ -736,6 +940,9 @@ def test_array_ops_behavioral() -> None:
     assert tf.extract_volume_patches(None) is None
     vol = tf.ones((1, 2, 2, 2, 1), dtype=tf.float32)
     assert tf.extract_volume_patches(vol, [1, 1, 1, 1, 1], [1, 1, 1, 1, 1], "VALID") is not None
+    assert tf.extract_volume_patches(vol, [1, 2, 2, 2, 1], [1, 1, 1, 1, 1], "SAME") is not None
+    assert tf.extract_volume_patches(vol, [1, 5, 5, 5, 1], [1, 1, 1, 1, 1], "VALID") is not None
+    assert tf.extract_volume_patches(Tensor([1.0, 2.0])) is not None
     assert tf.fftnd(None) is None
     assert tf.fftnd(Tensor([1.0, 0.0])) is not None
     assert tf.ifftnd(None) is None
@@ -782,6 +989,9 @@ def test_array_ops_behavioral() -> None:
     oh = tf.one_hot(Tensor([0, 2]), depth=3)
     assert oh is not None
     debugging.assert_near(oh, [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    oh_ax0 = tf.one_hot(Tensor([0, -1]), depth=2, axis=0)
+    assert oh_ax0 is not None and oh_ax0.shape == (2, 2)
+    debugging.assert_near(oh_ax0, [[1.0, 0.0], [0.0, 0.0]])
 
     padded = tf.pad(Tensor([[1.0]]), [[0, 1], [1, 0]])
     assert isinstance(padded, Tensor)
@@ -793,7 +1003,7 @@ def test_array_ops_behavioral() -> None:
     ps2 = tf.parallel_stack(Tensor([1.0, 2.0]))
     assert ps2 is not None and ps2.shape == (2,)
 
-    for cast_fn in (
+    for dt_alias in (
         tf.half,
         tf.qint8,
         tf.qint16,
@@ -806,8 +1016,7 @@ def test_array_ops_behavioral() -> None:
         tf.resource,
         tf.variant,
     ):
-        assert cast_fn() is None
-        assert isinstance(cast_fn(Tensor(1)), Tensor)
+        assert isinstance(dt_alias, tf.DType)
 
     assert tf.random_index_shuffle(None, [1, 2], 10) is None
     ris0 = tf.random_index_shuffle(Tensor(0), [1, 2], 0)
@@ -935,7 +1144,7 @@ def test_array_ops_behavioral() -> None:
     assert ui1 is not None
     debugging.assert_equal(ui1, [[0, 1], [2, 2]])
 
-    # Traced mode branch for boolean_mask
+    # Traced mode branch for boolean_mask and pad
     prev_tr = _tracer.is_tracing
     prev_gr = _tracer.active_graph
     _tracer.is_tracing = True
@@ -943,6 +1152,7 @@ def test_array_ops_behavioral() -> None:
     try:
         t_sym = Tensor([1.0, 2.0])
         assert isinstance(tf.boolean_mask(t_sym, Tensor([True, False])), Tensor)
+        assert isinstance(tf.pad(t_sym, [[1, 1]], mode="REFLECT"), Tensor)
     finally:
         _tracer.is_tracing = prev_tr
         _tracer.active_graph = prev_gr
@@ -1058,16 +1268,309 @@ def test_math_ops_behavioral() -> None:
     )
     assert isinstance(tf.math.invert_permutation(Tensor([1, 0], dtype=tf.int32)), Tensor)
     assert isinstance(tf.math.polyval(Tensor(1.0), Tensor(3.0)), Tensor)
-    assert isinstance(tf.math.scalar_mul(2.0, t_pos), Tensor)
-    assert isinstance(
-        tf.math.segment_sum(Tensor([1.0, 2.0, 3.0]), Tensor([0, 0, 1], dtype=tf.int32)),
-        Tensor,
+    debugging.assert_near(tf.math.polyval([2.0, 3.0, 1.0], Tensor([1.0, 2.0])), [6.0, 15.0])
+    debugging.assert_near(tf.math.polyval(Tensor([2.0, 3.0, 1.0]), Tensor([1.0, 2.0])), [6.0, 15.0])
+    debugging.assert_near(tf.math.polyval([], Tensor([1.0, 2.0])), [0.0, 0.0])
+    debugging.assert_near(tf.math.polyval(None, Tensor([1.0, 2.0])), [0.0, 0.0])
+    x_pv = tf.Variable([2.0, 3.0])
+    with tf.GradientTape() as tape_pv:
+        y_pv = tf.math.polyval([2.0, 3.0, 1.0], x_pv)
+    g_pv = tape_pv.gradient(y_pv, x_pv)
+    assert isinstance(g_pv, Tensor)
+    debugging.assert_near(g_pv, [11.0, 15.0])
+
+    # Bincount & Confusion Matrix behavioral verification
+    debugging.assert_equal(
+        tf.math.bincount(Tensor([1, 1, 2, 3], dtype=tf.int32), minlength=5, maxlength=3),
+        [0, 2, 1],
     )
+    debugging.assert_equal(
+        tf.math.bincount(Tensor([1, 1, 2], dtype=tf.int32), binary_output=True),
+        [0, 1, 1],
+    )
+    debugging.assert_near(
+        tf.math.bincount(Tensor([0, 1, 1], dtype=tf.int32), weights=Tensor([0.5, 1.5, 2.0])),
+        [0.5, 3.5],
+    )
+    debugging.assert_equal(
+        tf.math.bincount(Tensor([[0, 1, 3], [2, 2, 0]], dtype=tf.int32), maxlength=2, axis=-1),
+        [[1, 1], [1, 0]],
+    )
+    debugging.assert_equal(
+        tf.math.bincount(
+            Tensor([[0, 1, 1], [2, 2, 0]], dtype=tf.int32), axis=-1, binary_output=True
+        ),
+        [[1, 1, 0], [1, 0, 1]],
+    )
+    debugging.assert_near(
+        tf.math.bincount(
+            Tensor([[0, 1], [1, 0]], dtype=tf.int32),
+            weights=Tensor([[1.0, 2.0], [3.0, 4.0]]),
+            axis=-1,
+        ),
+        [[1.0, 2.0], [4.0, 3.0]],
+    )
+    debugging.assert_equal(
+        tf.math.confusion_matrix([0, 1, 2, 1], [0, 2, 2, 1], num_classes=Tensor(3, dtype=tf.int32)),
+        [[1, 0, 0], [0, 1, 1], [0, 0, 1]],
+    )
+    debugging.assert_equal(
+        tf.math.confusion_matrix([0, 2], [0, 2], num_classes=1),
+        [[1]],
+    )
+    debugging.assert_near(
+        tf.math.confusion_matrix(
+            [0, 1, 2], [0, 1, 2], num_classes=2, weights=[1.5, 2.5, 9.0], dtype=tf.float32
+        ),
+        [[1.5, 0.0], [0.0, 2.5]],
+    )
+
+    # Cumulative ops with exclusive and reverse
+    mat_cum = Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    debugging.assert_near(
+        tf.math.cumsum(mat_cum, axis=-1, exclusive=True, reverse=True),
+        [[5.0, 3.0, 0.0], [11.0, 6.0, 0.0]],
+    )
+    debugging.assert_near(
+        tf.math.cumprod(mat_cum, axis=-1, exclusive=True, reverse=True),
+        [[6.0, 3.0, 1.0], [30.0, 6.0, 1.0]],
+    )
+    debugging.assert_near(
+        tf.math.cumulative_logsumexp(Tensor([0.0, 0.0]), axis=[0], exclusive=True, reverse=True),
+        [0.0, float("-inf")],
+    )
+
+    # N-D Segment & Unsorted Segment reductions
+    seg_data_2d = Tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    seg_ids = Tensor([0, 0, 2], dtype=tf.int32)
+    debugging.assert_near(
+        tf.math.segment_sum(seg_data_2d, seg_ids), [[4.0, 6.0], [0.0, 0.0], [5.0, 6.0]]
+    )
+    debugging.assert_near(
+        tf.math.segment_mean(seg_data_2d, seg_ids), [[2.0, 3.0], [0.0, 0.0], [5.0, 6.0]]
+    )
+    debugging.assert_near(
+        tf.math.segment_prod(seg_data_2d, seg_ids), [[3.0, 8.0], [1.0, 1.0], [5.0, 6.0]]
+    )
+    debugging.assert_near(
+        tf.math.segment_min(seg_data_2d, seg_ids), [[1.0, 2.0], [0.0, 0.0], [5.0, 6.0]]
+    )
+    debugging.assert_near(
+        tf.math.segment_max(seg_data_2d, seg_ids), [[3.0, 4.0], [0.0, 0.0], [5.0, 6.0]]
+    )
+    useg_ids = Tensor([1, 0, 1], dtype=tf.int32)
+    num_s_t = Tensor(3, dtype=tf.int32)
+    debugging.assert_near(
+        tf.math.unsorted_segment_sum(seg_data_2d, Tensor([1, -1, 1], dtype=tf.int32), num_s_t),
+        [[0.0, 0.0], [6.0, 8.0], [0.0, 0.0]],
+    )
+    debugging.assert_near(
+        tf.math.unsorted_segment_mean(seg_data_2d, useg_ids, 2),
+        [[3.0, 4.0], [3.0, 4.0]],
+    )
+    debugging.assert_near(
+        tf.math.unsorted_segment_prod(seg_data_2d, useg_ids, 2),
+        [[3.0, 4.0], [5.0, 12.0]],
+    )
+    debugging.assert_near(
+        tf.math.unsorted_segment_min(seg_data_2d, useg_ids, 2),
+        [[3.0, 4.0], [1.0, 2.0]],
+    )
+    debugging.assert_near(
+        tf.math.unsorted_segment_max(seg_data_2d, useg_ids, 2),
+        [[3.0, 4.0], [5.0, 6.0]],
+    )
+    assert tf.math.unsorted_segment_sqrt_n(seg_data_2d, useg_ids, 2).shape == (2, 2)
+
+    # Special functions (dawsn, fresnel_cos, Fresnel_cos, fresnel_sin, spence, erfcinv, lbeta, lgamma, ndtri)
+    debugging.assert_near(
+        tf.math.dawsn(Tensor([0.0, 1.0, -1.0, 7.0])),
+        [0.0, 0.5380795, -0.5380795, 0.0721899],
+        atol=1e-4,
+    )
+    debugging.assert_near(tf.math.dawsn(Tensor(1, dtype=tf.int32)), 0.5380795, atol=1e-4)
+    debugging.assert_near(
+        tf.math.fresnel_cos(Tensor([0.0, 1.0, -1.0, 3.0])),
+        [0.0, 0.7798934, -0.7798934, 0.6057207],
+        atol=1e-4,
+    )
+    debugging.assert_near(tf.math.Fresnel_cos(Tensor([1.0])), [0.7798934], atol=1e-4)
+    debugging.assert_near(
+        tf.math.fresnel_sin(Tensor([0.0, 1.0, -1.0, 3.0])),
+        [0.0, 0.4382591, -0.4382591, 0.4963131],
+        atol=1e-4,
+    )
+    sp_out = tf.math.spence(Tensor([0.0, 0.25, 1.0, 1.25, 1.75, 4.0]))
+    debugging.assert_near(
+        sp_out,
+        [1.6449341, 0.9784694, 0.0, -0.2359003, -0.6427613, -1.9393754],
+        atol=1e-4,
+    )
+    sp_neg = tf.math.spence(Tensor(-1.0)).tolist()
+    assert isinstance(sp_neg, float) and sp_neg != sp_neg
+    debugging.assert_near(tf.math.erfcinv(Tensor([1.0, 0.5])), [0.0, 0.47693628], atol=1e-5)
+    debugging.assert_near(tf.math.lgamma(Tensor([1.0, 2.0, 3.0])), [0.0, 0.0, 0.6931472], atol=1e-5)
+    debugging.assert_near(tf.math.lbeta(Tensor(1.0)), 0.0)
+    debugging.assert_near(
+        tf.math.lbeta(Tensor([[2.0, 3.0], [1.0, 1.0]])), [-2.4849066, 0.0], atol=1e-5
+    )
+    debugging.assert_near(tf.math.ndtri(Tensor([0.5, 0.84134475])), [0.0, 1.0], atol=1e-5)
+    debugging.assert_equal(tf.range(4), [0, 1, 2, 3])
+
+    assert isinstance(tf.math.scalar_mul(2.0, t_pos), Tensor)
 
     mat2 = Tensor([[1.0, 2.0], [3.0, 4.0]], dtype=tf.float32)
     assert isinstance(tf.matmul(mat2, mat2), Tensor)
+    debugging.assert_near(
+        tf.matmul(mat2, mat2, transpose_a=True, transpose_b=True),
+        [[7.0, 15.0], [10.0, 22.0]],
+    )
+    debugging.assert_near(
+        tf.matmul(mat2, mat2, adjoint_a=True, adjoint_b=True),
+        [[7.0, 15.0], [10.0, 22.0]],
+    )
     assert isinstance(tf.tensordot(mat2, mat2, axes=1), Tensor)
-    assert tf.meshgrid(t_pos, t_gt1) is not None
-    assert isinstance(tf.norm(t_pos), Tensor)
+    assert tf.meshgrid() == []
+    mg1 = tf.meshgrid(t_pos)
+    assert len(mg1) == 1 and mg1[0].shape == (2,)
+    mg_xy = tf.meshgrid(Tensor([1.0, 2.0]), Tensor([3.0, 4.0, 5.0]), indexing="xy")
+    assert len(mg_xy) == 2 and mg_xy[0].shape == (3, 2) and mg_xy[1].shape == (3, 2)
+    mg_ij = tf.meshgrid(
+        Tensor([1.0, 2.0]),
+        Tensor([3.0, 4.0, 5.0]),
+        Tensor([6.0, 7.0, 8.0, 9.0]),
+        indexing="ij",
+    )
+    assert len(mg_ij) == 3 and mg_ij[0].shape == (2, 3, 4)
+    with pytest.raises(ValueError, match="indexing"):
+        tf.meshgrid(t_pos, t_gt1, indexing="invalid")
+
+    for ord_v in ("euclidean", "fro", 1, 2, float("inf"), float("-inf"), 3):
+        n_res = tf.norm(mat2, ord=ord_v, axis=[0, 1], keepdims=True)
+        assert n_res.shape == (1, 1)
+        ln_res = tf.linalg.norm(mat2, ord=ord_v, axis=(0, 1), keepdims=True)
+        assert ln_res.shape == (1, 1)
+    with pytest.raises((ValueError, TypeError)):
+        tf.norm(mat2, ord="invalid_ord")
+    normed, norm_v = tf.linalg.normalize(Tensor([[3.0, 4.0]]), ord=2, axis=1)
+    debugging.assert_near(normed, [[0.6, 0.8]])
+    debugging.assert_near(norm_v, [[5.0]])
+
+    bm_ax1 = tf.boolean_mask(
+        Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]), Tensor([True, False, True]), axis=1
+    )
+    assert bm_ax1 is not None and bm_ax1.shape == (2, 2)
+    debugging.assert_near(bm_ax1, [[1.0, 3.0], [4.0, 6.0]])
+    bm_empty = tf.boolean_mask(Tensor([[1.0, 2.0], [3.0, 4.0]]), Tensor([False, False]), axis=-1)
+    assert bm_empty is not None and bm_empty.shape == (2, 0)
+
+    cgn_empty = tf.clip_by_global_norm([], 1.0)
+    assert cgn_empty is not None and cgn_empty[0] == [] and cgn_empty[1].numpy() == 0.0
+
+    with tf.GradientTape() as tape:
+        x_clip = Tensor([3.0, 4.0])
+        tape.watch(x_clip)
+        y_clip = tf.clip_by_norm(x_clip, 2.5)
+        assert y_clip is not None
+        loss_clip = tf.reduce_sum(y_clip)
+    g_clip = tape.gradient(loss_clip, x_clip)
+    assert isinstance(g_clip, Tensor) and g_clip.shape == (2,)
+
+    ds_no_items = tf.dynamic_stitch([Tensor([], dtype=tf.int32)], [Tensor([], dtype=tf.float32)])
+    assert ds_no_items is not None and ds_no_items.shape == (0,)
+    ds_2d = tf.dynamic_stitch(
+        [Tensor([0, 2]), Tensor([1])],
+        [Tensor([[1.0, 2.0], [5.0, 6.0]]), Tensor([[3.0, 4.0]])],
+    )
+    assert ds_2d is not None and ds_2d.shape == (3, 2)
+    debugging.assert_near(ds_2d, [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+
+    ed_dense = tf.edit_distance(Tensor([[1, 2], [3, 4]]), Tensor([[1, 3], [3, 4]]), normalize=True)
+    assert ed_dense is not None and ed_dense.shape == (2,)
+    debugging.assert_near(ed_dense, [0.5, 0.0])
+
+    es_t = tf.ensure_shape(Tensor([1.0, 2.0]), Tensor([2], dtype=tf.int32))
+    assert es_t is not None and es_t.shape == (2,)
+    es_ts = tf.ensure_shape(Tensor([1.0, 2.0]), tf.TensorShape([2]))
+    assert es_ts is not None and es_ts.shape == (2,)
+
+    sp_parts = tf.split(Tensor([[1, 2, 3, 4, 5, 6]]), [1, 2, 3], axis=1)
+    assert [p.shape for p in sp_parts] == [(1, 1), (1, 2), (1, 3)]
+    sp_infer = tf.split(Tensor([[1, 2, 3, 4, 5, 6]]), Tensor([2, -1, 1], dtype=tf.int32), axis=-1)
+    assert [p.shape for p in sp_infer] == [(1, 2), (1, 3), (1, 1)]
+
+    assert tf.squeeze(Tensor([[1.0, 2.0]]), axis=0).shape == (2,)
+    with pytest.raises(ValueError, match="squeeze"):
+        tf.squeeze(Tensor([[1.0, 2.0]]), axis=1)
+    with pytest.raises(ValueError, match="squeeze"):
+        tf.squeeze(Tensor([[1.0]]), axis=[0, 5])
+
+    t_cplx = Tensor([[complex(1.0, 2.0), complex(3.0, 4.0)]])
+    t_conj_T = tf.transpose(t_cplx, conjugate=True)
+    assert t_conj_T.shape == (2, 1)
+    assert t_conj_T.tolist() == [[complex(1.0, -2.0)], [complex(3.0, -4.0)]]
+
+    w_0d_t = tf.where(Tensor(True))
+    assert w_0d_t.shape == (1, 0)
+    w_0d_f = tf.where(Tensor(False))
+    assert w_0d_f.shape == (0, 0)
+    w_2d = tf.where(Tensor([[True, False], [False, True]]))
+    assert w_2d.shape == (2, 2) and w_2d.tolist() == [[0, 0], [1, 1]]
+    w_2d_empty = tf.where(Tensor([[False, False], [False, False]]))
+    assert w_2d_empty.shape == (0, 2)
+
+    bc_0d = tf.bitcast(Tensor(1.0, dtype=tf.float32), tf.int32)
+    assert bc_0d.shape == () and bc_0d.numpy() == 1065353216
+    bc_inc = tf.bitcast(Tensor(0x01020304, dtype=tf.int32), tf.uint8)
+    assert bc_inc.shape == (4,) and bc_inc.tolist() == [4, 3, 2, 1]
+    bc_dec = tf.bitcast(Tensor([[4, 3, 2, 1]], dtype=tf.uint8), tf.int32)
+    assert bc_dec.shape == (1,) and bc_dec.tolist() == [0x01020304]
+    with pytest.raises(ValueError, match="Cannot bitcast"):
+        tf.bitcast(Tensor([1, 2, 3], dtype=tf.uint8), tf.int32)
+
+    g_batched = tf.gather(
+        Tensor([[10, 20, 30], [40, 50, 60]]),
+        Tensor([[2, 0], [1, 2]], dtype=tf.int32),
+        batch_dims=1,
+    )
+    assert g_batched.shape == (2, 2) and g_batched.tolist() == [[30, 10], [50, 60]]
+    g_neg_b = tf.gather(
+        Tensor([[10, 20], [30, 40]]),
+        Tensor([[1], [0]], dtype=tf.int32),
+        axis=-1,
+        batch_dims=-1,
+    )
+    assert g_neg_b.shape == (2, 1) and g_neg_b.tolist() == [[20], [30]]
+
+    gnd_2d = tf.gather_nd(Tensor([[10, 20], [30, 40]]), Tensor([[0, 1], [1, 0]], dtype=tf.int32))
+    assert gnd_2d.shape == (2,) and gnd_2d.tolist() == [20, 30]
+    gnd_b1 = tf.gather_nd(
+        Tensor([[10, 20, 30], [40, 50, 60]]),
+        Tensor([[[2]], [[1]]], dtype=tf.int32),
+        batch_dims=-1,
+    )
+    assert gnd_b1.shape == (2, 1) and gnd_b1.tolist() == [[30], [50]]
+    gnd_0d = tf.gather_nd(Tensor(42), Tensor(0, dtype=tf.int32))
+    assert isinstance(gnd_0d, Tensor)
+
+    snd_2d = tf.scatter_nd(
+        Tensor([[0, 1], [1, 0]], dtype=tf.int32),
+        Tensor([5.0, 9.0]),
+        [2, 2],
+    )
+    assert snd_2d.shape == (2, 2) and snd_2d.tolist() == [[0.0, 5.0], [9.0, 0.0]]
+
+    p_ref = tf.pad(Tensor([[1, 2], [3, 4]]), [[1, 0], [0, 1]], mode="REFLECT")
+    assert isinstance(p_ref, Tensor) and p_ref.shape == (3, 3)
+    p_sym = tf.pad(Tensor([[1, 2], [3, 4]]), [[1, 0], [0, 1]], mode="SYMMETRIC")
+    assert isinstance(p_sym, Tensor) and p_sym.shape == (3, 3)
+    p_cst = tf.pad(Tensor([1, 2]), [[1, 1]], mode="CONSTANT", constant_values=9)
+    assert isinstance(p_cst, Tensor) and p_cst.tolist() == [9, 1, 2, 9]
+
+    fl_2d = tf.foldl(lambda a, b: a + b, Tensor([[1.0, 2.0], [3.0, 4.0]]))
+    assert fl_2d is not None and fl_2d.shape == (2,) and fl_2d.tolist() == [4.0, 6.0]
+    fr_2d = tf.foldr(lambda a, b: a + b, Tensor([[1.0, 2.0], [3.0, 4.0]]))
+    assert fr_2d is not None and fr_2d.shape == (2,) and fr_2d.tolist() == [4.0, 6.0]
+
     assert isinstance(tf.ones_like(t_pos), Tensor)
     assert isinstance(tf.zeros_like(t_pos), Tensor)

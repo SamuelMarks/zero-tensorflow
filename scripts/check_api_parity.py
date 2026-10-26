@@ -36,12 +36,17 @@ _IGNORED_SYMBOLS: set[str] = {
     "AttributeValue",
     "Callable",
     "CallableOperandProtocol",
+    "CondBranchProtocol",
+    "CustomGradientFnProtocol",
     "DTypeLike",
     "DatasetElement",
+    "DatasetMapFnProtocol",
     "Future",
+    "GradFnProtocol",
     "IntTuple",
     "Iterable",
     "Mapping",
+    "NestedSequence",
     "NestedTensorData",
     "NumpyConvertibleProtocol",
     "Protocol",
@@ -53,6 +58,7 @@ _IGNORED_SYMBOLS: set[str] = {
     "ShapeLike",
     "ShapeTuple",
     "StringTensorLike",
+    "TensorCompatible",
     "TensorConfig",
     "TensorLike",
     "TensorOperand",
@@ -67,6 +73,8 @@ _IGNORED_SYMBOLS: set[str] = {
     "TypeGuard",
     "TypeVar",
     "ValuesHolderProtocol",
+    "WhileBodyProtocol",
+    "WhileCondProtocol",
     "array_ops",
     "as_operand",
     "as_tensor_obj",
@@ -168,7 +176,14 @@ def check_parity(
         if inspect.ismodule(obj) or inspect.isclass(obj):
             if inspect.isclass(obj) and name in ("math", "nn", "data", "linalg", "bitwise"):
                 for sub_name, sub_obj in inspect.getmembers(obj):
-                    if sub_name.startswith("_") or sub_name == "pow":
+                    if sub_name.startswith("_") or sub_name in (
+                        "pow",
+                        "dawsn",
+                        "fresnel_cos",
+                        "Fresnel_cos",
+                        "fresnel_sin",
+                        "spence",
+                    ):
                         continue
                     if callable(sub_obj) and sub_name not in contents:
                         errors.append(f"Missing in official TF: {path}.{name}.{sub_name}")

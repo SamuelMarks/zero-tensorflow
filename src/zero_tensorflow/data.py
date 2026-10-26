@@ -12,7 +12,7 @@ import random
 import sqlite3
 import threading
 import zlib
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from collections.abc import Iterator as PyIterator
 from concurrent.futures import Future, ThreadPoolExecutor
 
@@ -405,12 +405,12 @@ class Dataset:
         return self._generator()
 
     def _generator(self) -> PyIterator[DatasetElement]:
-        """Yield elements from the dataset.
+        """Return an iterator over the elements of the dataset.
 
-        Yields:
-            DatasetElement: Dataset elements.
+        Returns:
+            PyIterator[DatasetElement]: Dataset elements iterator.
         """
-        yield from ()
+        return iter(())
 
     @classmethod
     def from_tensor_slices(cls, tensors: TensorOperand) -> Dataset:
@@ -500,6 +500,38 @@ class Dataset:
             Dataset: A new `BatchDataset`.
         """
         return BatchDataset(self, batch_size, drop_remainder)
+
+    def padded_batch(
+        self,
+        batch_size: int,
+        padded_shapes: TensorOperand = None,
+        padding_values: TensorOperand = None,
+        drop_remainder: bool = False,
+        name: str | None = None,
+    ) -> Dataset:
+        """Combine consecutive elements of this dataset into padded batches.
+
+        Args:
+            batch_size: Number of consecutive elements to combine per batch.
+            padded_shapes: Optional padded shape specification.
+            padding_values: Optional padding scalar value.
+            drop_remainder: Whether the last batch should be dropped if smaller than `batch_size`.
+            name: Optional operation name.
+
+        Returns:
+            Dataset: A new `BatchDataset`.
+        """
+        del padded_shapes, padding_values, name
+        return BatchDataset(self, batch_size, drop_remainder)
+
+    @property
+    def element_spec(self) -> TensorOperand:
+        """Return the type specification of an element of this dataset.
+
+        Returns:
+            TensorOperand: Element type specification.
+        """
+        return None
 
     def unbatch(self) -> Dataset:
         """Split elements of a dataset into multiple elements along the batch dimension.
@@ -699,16 +731,36 @@ class TensorSliceDataset(Dataset):
         """Initialize `TensorSliceDataset`.
 
         Args:
-            elements: Iterable, string, or sequence of elements to slice.
+            elements: Iterable, mapping, tuple, string, or sequence of elements to slice.
         """
         if isinstance(elements, str):
             self.elements: list[DatasetElement] = list(elements)
+        elif isinstance(elements, Mapping):
+            cols: dict[str, list[TensorOperand]] = {
+                k: list(v) if isinstance(v, Iterable) and not isinstance(v, (str, bytes)) else [v]
+                for k, v in elements.items()
+            }
+            n = min((len(v) for v in cols.values()), default=0)
+            self.elements = [{k: cols[k][i] for k in cols} for i in range(n)]
+        elif (
+            isinstance(elements, tuple)
+            and len(elements) >= 2
+            and all(
+                isinstance(part, Sequence) and not isinstance(part, (str, bytes))
+                for part in elements
+            )
+        ):
+            parts: list[list[TensorOperand]] = [
+                list(p) for p in elements if isinstance(p, Sequence)
+            ]
+            n_tup = min((len(p) for p in parts), default=0)
+            self.elements = [[p[i] for p in parts] for i in range(n_tup)]
         elif isinstance(elements, Iterable):
             self.elements = list(elements)
         else:
             self.elements = []
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield individual sliced elements.
 
         Yields:
@@ -740,7 +792,7 @@ class MapDataset(Dataset):
         self._num_parallel_calls = num_parallel_calls
         self._deterministic = deterministic
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield mapped elements sequentially or via a thread pool.
 
         Yields:
@@ -799,7 +851,7 @@ class FilterDataset(Dataset):
         self._input_dataset = input_dataset
         self._predicate = predicate
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield elements for which `predicate(elem)` evaluates to True.
 
         Yields:
@@ -835,7 +887,7 @@ class BatchDataset(Dataset):
         self._batch_size = batch_size
         self._drop_remainder = drop_remainder
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield lists of `batch_size` elements.
 
         Yields:
@@ -863,7 +915,7 @@ class UnbatchDataset(Dataset):
         """
         self._input_dataset = input_dataset
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield unbatched individual elements.
 
         Yields:
@@ -902,7 +954,7 @@ class ShuffleDataset(Dataset):
             reshuffle_each_iteration if reshuffle_each_iteration is not None else True
         )
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield shuffled elements sampled from the internal buffer.
 
         Yields:
@@ -945,7 +997,7 @@ class PrefetchDataset(Dataset):
         self._input_dataset = input_dataset
         self._buffer_size = buffer_size
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield prefetched elements from a background producer thread.
 
         Yields:
@@ -996,22 +1048,22 @@ class CacheDataset(Dataset):
         self._filename = filename
         self._cache: list[DatasetElement] | None = None
 
-    def _generator(self) -> PyIterator[DatasetElement]:
-        """Yield elements from memory cache or underlying dataset.
+    def _generator(self) -> Generator[DatasetElement, None, None]:
+        """Yield elements from memory/file cache or underlying dataset.
 
         Yields:
             DatasetElement: Cached dataset element.
         """
-        if self._filename == "":
-            if self._cache is None:
-                self._cache = []
-                for elem in self._input_dataset:
-                    self._cache.append(elem)
-                    yield elem
-            else:
-                yield from self._cache
+        if self._cache is None:
+            self._cache = []
+            for elem in self._input_dataset:
+                self._cache.append(elem)
+                yield elem
+            if self._filename and os.path.isdir(os.path.dirname(self._filename) or "."):
+                with open(self._filename, "w", encoding="utf-8") as f:
+                    json.dump([str(x) for x in self._cache], f)
         else:
-            yield from self._input_dataset
+            yield from self._cache
 
 
 class InterleaveDataset(Dataset):
@@ -1043,7 +1095,7 @@ class InterleaveDataset(Dataset):
         self._num_parallel_calls = num_parallel_calls
         self._deterministic = deterministic
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield interleaved elements across active sub-dataset iterators.
 
         Yields:
@@ -1099,7 +1151,7 @@ class WindowDataset(Dataset):
         self._stride = stride
         self._drop_remainder = drop_remainder
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield `TensorSliceDataset` windows over the input dataset.
 
         Yields:
@@ -1129,7 +1181,7 @@ class TakeDataset(Dataset):
         self._input_dataset = input_dataset
         self._count = count
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield up to `_count` elements.
 
         Yields:
@@ -1157,7 +1209,7 @@ class SkipDataset(Dataset):
         self._input_dataset = input_dataset
         self._count = count
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield elements after skipping `_count` items.
 
         Yields:
@@ -1184,7 +1236,17 @@ class RepeatDataset(Dataset):
         self._input_dataset = input_dataset
         self._count = count
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def cardinality(self) -> int:
+        """Return cardinality (`INFINITE_CARDINALITY` when `count is None` or `< 0`).
+
+        Returns:
+            int: Dataset cardinality.
+        """
+        if self._count is None or self._count < 0:
+            return INFINITE_CARDINALITY
+        return self._input_dataset.cardinality() * max(0, self._count)
+
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield repeated elements from `_input_dataset`.
 
         Yields:
@@ -1208,7 +1270,7 @@ class EnumerateDataset(Dataset):
         self._input_dataset = input_dataset
         self._start = start
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield `[index, element]` pairs.
 
         Yields:
@@ -1238,7 +1300,7 @@ class FlatMapDataset(Dataset):
         self._input_dataset = input_dataset
         self._map_func = map_func
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield flattened elements from each mapped `Dataset`.
 
         Yields:
@@ -1260,7 +1322,7 @@ class ZipDataset(Dataset):
         """
         self._datasets = list(datasets)
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield lists of corresponding elements across `_datasets`.
 
         Yields:
@@ -1283,7 +1345,7 @@ class ConcatenateDataset(Dataset):
         self._first = first
         self._second = second
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield all elements of `_first` followed by all elements of `_second`.
 
         Yields:
@@ -1310,7 +1372,7 @@ class TakeWhileDataset(Dataset):
         self._input_dataset = input_dataset
         self._predicate = predicate
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield elements while `_predicate(elem)` is `True`.
 
         Yields:
@@ -1333,7 +1395,7 @@ class UniqueDataset(Dataset):
         """
         self._input_dataset = input_dataset
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield unique elements in order of first appearance.
 
         Yields:
@@ -1406,7 +1468,7 @@ class FixedLengthRecordDataset(Dataset):
         self.kwargs = kwargs
         self.options: dict[str, TensorOperand] = dict(kwargs)
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield fixed-length binary records from files if present, else `b""`.
 
         Yields:
@@ -1464,7 +1526,7 @@ class TFRecordDataset(Dataset):
         self.kwargs = kwargs
         self.options: dict[str, TensorOperand] = dict(kwargs)
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield decoded TFRecord byte payloads from each file in `self.filenames`.
 
         Yields:
@@ -1514,7 +1576,7 @@ class TextLineDataset(Dataset):
         self.kwargs = kwargs
         self.options: dict[str, TensorOperand] = dict(kwargs)
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield text lines from `self.filenames` if files exist, else `""`.
 
         Yields:
@@ -1561,7 +1623,7 @@ class _SqlDatasetImpl(Dataset):
         self.kwargs = kwargs
         self.options: dict[str, TensorOperand] = dict(kwargs)
 
-    def _generator(self) -> PyIterator[tuple[TensorOperand, ...]]:
+    def _generator(self) -> Generator[tuple[TensorOperand, ...], None, None]:
         """Yield SQL result row tuples if database file exists, else `()`.
 
         Yields:
@@ -1593,7 +1655,7 @@ class _AssertCardinalityDataset(Dataset):
         self._input_dataset = input_dataset
         self._expected_cardinality = expected_cardinality
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield elements from `_input_dataset` after verifying cardinality.
 
         Yields:
@@ -1624,7 +1686,7 @@ class _IgnoreErrorsDataset(Dataset):
         self._input_dataset = input_dataset
         self._log_warning = log_warning
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield elements from `_input_dataset`, skipping elements that raise errors.
 
         Yields:
@@ -1665,7 +1727,7 @@ class _ScanDataset(Dataset):
         self._initial_state = initial_state
         self._scan_func = scan_func
 
-    def _generator(self) -> PyIterator[DatasetElement]:
+    def _generator(self) -> Generator[DatasetElement, None, None]:
         """Yield scanned output elements while updating state.
 
         Yields:
@@ -1790,7 +1852,15 @@ class experimental:
             self.args = args
             self.kwargs = kwargs
 
-        def _generator(self) -> PyIterator[DatasetElement]:
+        def cardinality(self) -> int:
+            """Return `INFINITE_CARDINALITY` (`-1`) for `Counter` datasets.
+
+            Returns:
+                int: `INFINITE_CARDINALITY` (`-1`).
+            """
+            return INFINITE_CARDINALITY
+
+        def _generator(self) -> Generator[DatasetElement, None, None]:
             """Yield sequential integer counts starting from `self.start`.
 
             Yields:
@@ -1843,7 +1913,7 @@ class experimental:
             self.args = args
             self.kwargs = kwargs
 
-        def _generator(self) -> PyIterator[DatasetElement]:
+        def _generator(self) -> Generator[DatasetElement, None, None]:
             """Yield parsed CSV rows from `self.filenames`.
 
             Yields:
@@ -2095,7 +2165,7 @@ class experimental:
             self.args = args
             self.kwargs = kwargs
 
-        def _generator(self) -> PyIterator[DatasetElement]:
+        def _generator(self) -> Generator[DatasetElement, None, None]:
             """Yield deterministic pseudorandom integers.
 
             Yields:

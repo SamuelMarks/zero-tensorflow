@@ -67,3 +67,19 @@ def test_shape_eager() -> None:
     assert isinstance(strided, tf.Tensor)
     assert strided.shape == (2, 2)
     tf.debugging.assert_near(strided, [[1.0, 3.0], [4.0, 6.0]])
+
+    strided_shrink = tf.strided_slice(x, [1, 0], [2, 3], [1, 1], shrink_axis_mask=1)
+    assert strided_shrink.shape == (3,)
+    tf.debugging.assert_near(strided_shrink, [4.0, 5.0, 6.0])
+
+    strided_new = tf.strided_slice(x, [0, 0], [0, 2], [1, 1], new_axis_mask=1)
+    assert strided_new.shape == (1, 2, 3)
+
+    strided_ellipsis = tf.strided_slice(x, [0, 1], [0, 3], [1, 1], ellipsis_mask=1)
+    assert strided_ellipsis.shape == (2, 2)
+    tf.debugging.assert_near(strided_ellipsis, [[2.0, 3.0], [5.0, 6.0]])
+
+    strided_extra_axes = tf.strided_slice(
+        x, [0, 0, 0], [2, 3, 1], [1, 1, 1], begin_mask=1, end_mask=2
+    )
+    assert strided_extra_axes.shape == (2, 3)

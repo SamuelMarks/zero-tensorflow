@@ -5,104 +5,69 @@ from __future__ import annotations
 import builtins
 import math
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 
+import zero_tensorflow.dtypes as _dtypes
 from zero_tensorflow._typing import (
     ArrayLikeProtocol,
     DTypeLike,
     IntTuple,
     NestedTensorData,
+    ShapeLike,
+    ShapeTuple,
     TensorOperand,
+    ensure_shape_tuple,
 )
 
 import ml_switcheroo_compiler
 import ml_switcheroo_compiler.ops as _msc_ops
+import ml_switcheroo_compiler.ops.shape.slicing as _msc_slicing
 from ml_switcheroo_compiler.core.config import config as _compiler_config
-from ml_switcheroo_compiler.core.dtype import DType
+from ml_switcheroo_compiler.core.dtype import DType as _MscDType
 from ml_switcheroo_compiler.core.shape import TensorOrScalar
-from ml_switcheroo_compiler.core.tensor import TensorConfig
+from ml_switcheroo_compiler.core.tensor import TensorConfig, as_tensor_obj
+from ml_switcheroo_compiler.interpreter.evaluator import evaluate_graph
 from ml_switcheroo_compiler.tracing import ProxyTensor
 from ml_switcheroo_compiler.tracing.state import global_tracing_state as _tracer
-from ml_switcheroo_ir import AttributeValue, LogicalNode
+from ml_switcheroo_ir import AttributeValue, LogicalGraph, LogicalNode
 from typing_extensions import TypeAlias, TypeGuard
 
 from zero_keras import ops as _ops  # isort: skip
 
-_SliceItem: TypeAlias = "int | slice[int | None, int | None, int | None] | None | Tensor"
+_SliceItem: TypeAlias = (
+    "int | slice[int | None, int | None, int | None] | None | builtins.ellipsis | Tensor"
+)
 _SliceSpec: TypeAlias = "_SliceItem | builtins.tuple[_SliceItem, ...]"
 
-_DTYPE_ALIASES: dict[str, DType] = {
-    "float": DType.Float32,
-    "float16": DType.Float16,
-    "half": DType.Float16,
-    "float32": DType.Float32,
-    "float64": DType.Float64,
-    "double": DType.Float64,
-    "bfloat16": DType.BFloat16,
-    "float8_e4m3fn": DType.Float8E4M3FN,
-    "float8_e5m2": DType.Float8E5M2,
-    "complex": DType.Complex64,
-    "complex64": DType.Complex64,
-    "complex128": DType.Complex128,
-    "int": DType.Int32,
-    "int4": DType.Int4,
-    "int8": DType.Int8,
-    "int16": DType.Int16,
-    "int32": DType.Int32,
-    "int64": DType.Int64,
-    "uint4": DType.UInt4,
-    "uint8": DType.UInt8,
-    "uint16": DType.UInt16,
-    "uint32": DType.UInt32,
-    "uint64": DType.UInt64,
-    "qint8": DType.Int8,
-    "quint8": DType.UInt8,
-    "qint16": DType.Int16,
-    "quint16": DType.UInt16,
-    "qint32": DType.Int32,
-    "bool": DType.Bool,
-    "bool_": DType.Bool,
-    "string": DType.String,
-    "str": DType.String,
-    "bytes": DType.String,
-    "resource": DType.Int64,
-    "variant": DType.Int64,
-}
 
-
-def to_dtype(x: DTypeLike | type | TensorOperand = None) -> DType:
-    """Convert a string, Python type, or `DType` to a compiler `DType`.
+def to_dtype(x: DTypeLike | type | TensorOperand = None) -> _dtypes.DType:
+    """Convert a string, Python type, compiler `DType`, or `tf.DType` to `zero_tensorflow.dtypes.DType`.
 
     Args:
-        x: Input dtype representation (`DType`, string name, Python type, or `None`).
+        x: Input dtype representation (`DType`, `msc_dtype.DType`, string name, Python type, or `None`).
 
     Returns:
-        DType: Corresponding compiler `DType` (defaults to `DType.Float32` when `None`).
+        _dtypes.DType: Corresponding `zero_tensorflow.dtypes.DType` (defaults to `float32` when `None`).
 
     Raises:
         TypeError: If `x` is not a recognized data type representation.
     """
     if x is None:
-        return DType.Float32
-    if isinstance(x, DType):
+        return _dtypes.float32
+    if isinstance(x, _dtypes.DType):
         return x
+    lookup = _dtypes._DTYPE_LOOKUP
+    if isinstance(x, (_MscDType, type)) and x in lookup:
+        return lookup[x]
     if isinstance(x, str):
         normalized = x.strip().lower()
-        if normalized in _DTYPE_ALIASES:
-            return _DTYPE_ALIASES[normalized]
+        if normalized in lookup:
+            return lookup[normalized]
         raise TypeError(f"Cannot convert {x!r} to a TensorFlow DType.")
-    if x is builtins.bool:
-        return DType.Bool
-    if x is int:
-        return DType.Int32
-    if x is float:
-        return DType.Float32
-    if x is complex:
-        return DType.Complex64
-    if x is str or x is bytes:
-        return DType.String
-    if isinstance(x, type) and x.__name__.lower() in _DTYPE_ALIASES:
-        return _DTYPE_ALIASES[x.__name__.lower()]
+    if isinstance(x, type):
+        type_key = x.__name__.lower()
+        if type_key in lookup:
+            return lookup[type_key]
     raise TypeError(f"Cannot convert {x!r} of type {type(x).__name__} to a TensorFlow DType.")
 
 
@@ -212,7 +177,7 @@ def _to_tensor(
     if isinstance(unwrapped, ProxyTensor):
         try:
             dt = (
-                to_dtype(unwrapped.dtype)
+                to_dtype(unwrapped.dtype).as_compiler_dtype
                 if unwrapped.dtype
                 else _compiler_config.default_float_dtype
             )
@@ -227,7 +192,7 @@ def _to_tensor(
             ),
         )
 
-    dt_opt = to_dtype(dtype) if dtype is not None else None
+    dt_opt = to_dtype(dtype).as_compiler_dtype if dtype is not None else None
     res: ml_switcheroo_compiler.Tensor = _ops.array(unwrapped, dtype=dt_opt)
     return res
 
@@ -290,54 +255,21 @@ def _is_numpy_result(
     return isinstance(val, (int, float, builtins.bool, complex, ArrayLikeProtocol)) or val is None
 
 
-def _slice_nested(
-    data: NestedTensorData,
-    items: Sequence[_SliceItem],
-) -> NestedTensorData:
-    """Recursively slice nested Python list/scalar data according to `items`.
+def _flatten_bool_mask(mask_data: NestedTensorData) -> list[builtins.bool]:
+    """Flatten nested boolean mask data into a 1-D list of booleans.
 
     Args:
-        data: Nested Python list or scalar data.
-        items: Sequence of index/slice/None/Ellipsis items.
+        mask_data: Nested list or scalar boolean mask value.
 
     Returns:
-        NestedTensorData: Sliced nested data.
+        list[bool]: Flattened boolean flags.
     """
-    if not items:
-        return data
-    head = items[0]
-    tail = items[1:]
-    if head is None:
-        return [_slice_nested(data, tail)]
-    if isinstance(data, list):
-        if isinstance(head, slice):
-            return [_slice_nested(row, tail) for row in data[head]]
-        return _slice_nested(data[head if isinstance(head, int) else 0], tail)
-    return data
-
-
-def _boolean_mask_nested(
-    data: NestedTensorData,
-    mask: NestedTensorData,
-) -> list[NestedTensorData]:
-    """Filter `data` elements where corresponding `mask` entries are truthy.
-
-    Args:
-        data: Nested Python list or scalar data.
-        mask: Nested boolean mask list or scalar.
-
-    Returns:
-        list[NestedTensorData]: Filtered elements list.
-    """
-    if isinstance(data, list) and isinstance(mask, list):
-        out: list[NestedTensorData] = []
-        for d_item, m_item in zip(data, mask):
-            if isinstance(m_item, list):
-                out.extend(_boolean_mask_nested(d_item, m_item))
-            elif m_item:
-                out.append(d_item)
+    if isinstance(mask_data, list):
+        out: list[builtins.bool] = []
+        for item in mask_data:
+            out.extend(_flatten_bool_mask(item))
         return out
-    return [data] if mask else []
+    return [builtins.bool(mask_data)]
 
 
 class _TensorRef:
@@ -367,7 +299,7 @@ class _TensorRef:
         """
         return id(self._tensor)
 
-    def __eq__(self, other: builtins.object) -> builtins.bool:
+    def __eq__(self, other: _TensorRef | Tensor | TensorOperand) -> builtins.bool:
         """Compare identity equality with another `_TensorRef`.
 
         Args:
@@ -396,6 +328,7 @@ class Tensor:
             _traced_node: Optional traced IR `LogicalNode`.
         """
         self._traced_node_ids: dict[int, str] = {}
+        self._origin_graph: LogicalGraph | None = _tracer.active_graph
         self._tensor: ml_switcheroo_compiler.Tensor | None
         if _traced_node is not None:
             pt = ProxyTensor(id=_traced_node.id, shape=())
@@ -472,11 +405,11 @@ class Tensor:
         return self.device
 
     @property
-    def dtype(self) -> DType | None:
+    def dtype(self) -> _dtypes.DType | None:
         """Return the `DType` of the tensor.
 
         Returns:
-            DType | None: Tensor data type or None if uninitialized.
+            _dtypes.DType | None: Tensor data type or None if uninitialized.
         """
         return to_dtype(self._tensor.dtype.value) if self._tensor is not None else None
 
@@ -571,22 +504,44 @@ class Tensor:
             float | int | bool | complex | list[float]: Materialized array or constant value.
 
         Raises:
-            ValueError: If called on a non-constant symbolic traced tensor.
+            ValueError: If called on an unmaterialized symbolic traced tensor.
         """
         if self._tensor is not None and isinstance(self._tensor.data, ProxyTensor):
-            current_graph = _tracer.active_graph
-            if (
-                current_graph is not None
-                and self._tensor.data.id in current_graph.nodes
-                and current_graph.nodes[self._tensor.data.id].op_type == "Constant"
-            ):
-                val = current_graph.nodes[self._tensor.data.id].attributes.get("value")
-                if _is_numpy_result(val):
-                    return val
+            current_graph = _tracer.active_graph or self._origin_graph
+            if current_graph is not None and self._tensor.data.id in current_graph.nodes:
+                node = current_graph.nodes[self._tensor.data.id]
+                if node.op_type == "Constant":
+                    val = node.attributes.get("value")
+                    if _is_numpy_result(val):
+                        return val
+                elif node.inputs:
+                    prev_outputs = builtins.list(current_graph.outputs)
+                    prev_tracing = _tracer.is_tracing
+                    _tracer.is_tracing = False
+                    current_graph.outputs = [self._tensor.data.id]
+                    try:
+                        evaluated = evaluate_graph(current_graph, {})
+                    finally:
+                        current_graph.outputs = prev_outputs
+                        _tracer.is_tracing = prev_tracing
+                    eval_val = evaluated[self._tensor.data.id]
+                    assert _is_numpy_result(eval_val)
+                    return eval_val
             raise ValueError("Cannot call array conversion on a traced tensor")
         data = self._tensor.data if self._tensor is not None else None
         assert _is_numpy_result(data)
         return data
+
+    def tolist(self) -> NestedTensorData:
+        """Convert the tensor contents into nested Python lists or a Python scalar.
+
+        Returns:
+            NestedTensorData: Nested Python list or scalar representation.
+        """
+        arr = self.numpy()
+        if isinstance(arr, ArrayLikeProtocol):
+            return arr.tolist()
+        return arr
 
     def __getitem__(self, idx: _SliceSpec) -> Tensor:
         """Index or slice the tensor using integers, slices, `None`, `...`, or boolean `Tensor`s.
@@ -597,18 +552,74 @@ class Tensor:
         Returns:
             Tensor: Sliced or indexed `Tensor`.
         """
-        if isinstance(idx, Tensor) and idx.dtype == DType.Bool:
-            raw_self = self.numpy()
-            raw_mask = idx.numpy()
-            py_self = raw_self.tolist() if isinstance(raw_self, ArrayLikeProtocol) else raw_self
-            py_mask = raw_mask.tolist() if isinstance(raw_mask, ArrayLikeProtocol) else raw_mask
-            return Tensor(_boolean_mask_nested(py_self, py_mask), dtype=self.dtype)
+        if isinstance(idx, Tensor) and idx.dtype == _dtypes.bool:
+            prev_tracing = _tracer.is_tracing
+            _tracer.is_tracing = False
+            try:
+                mask_dims = idx.ndim
+                flat_mask = _flatten_bool_mask(idx.tolist())
+                true_indices = [i for i, flag in enumerate(flat_mask) if flag]
+                dt_val = self.dtype.value if self.dtype is not None else "float32"
+                if self.ndim == 0:
+                    return (
+                        _wrap_tensor(_ops.reshape(_to_tensor(self), (1,)))
+                        if true_indices
+                        else _wrap_tensor(_ops.zeros((0,), dtype=dt_val))
+                    )
+                trailing = self.shape[mask_dims:]
+                if not true_indices:
+                    return _wrap_tensor(_ops.zeros((0, *trailing), dtype=dt_val))
+                reshaped = (
+                    _ops.reshape(_to_tensor(self), (-1, *trailing))
+                    if mask_dims > 1
+                    else _to_tensor(self)
+                )
+                return _wrap_tensor(_ops.take(reshaped, true_indices, axis=0))
+            finally:
+                _tracer.is_tracing = prev_tracing
 
         items: builtins.tuple[_SliceItem, ...] = idx if isinstance(idx, builtins.tuple) else (idx,)
-        raw = self.numpy()
-        py_data = raw.tolist() if isinstance(raw, ArrayLikeProtocol) else raw
-        sliced = _slice_nested(py_data, items)
-        return Tensor(sliced, dtype=self.dtype)
+        if self.ndim == 0 and items == (0,):
+            return self
+
+        num_real_axes = sum(1 for it in items if it is not None and it is not Ellipsis)
+        expanded: list[int | slice[int | None, int | None, int | None] | None] = []
+        for it in items:
+            if it is Ellipsis:
+                fill_count = max(0, self.ndim - num_real_axes)
+                expanded.extend([slice(None, None, None)] * fill_count)
+                num_real_axes += fill_count
+            elif isinstance(it, Tensor):
+                raw_idx = it.tolist()
+                expanded.append(int(raw_idx) if isinstance(raw_idx, (int, float)) else 0)
+            else:
+                expanded.append(it)
+
+        prev_tracing = _tracer.is_tracing
+        _tracer.is_tracing = False
+        try:
+            cur = _to_tensor(self)
+            axis = 0
+            for step_item in expanded:
+                if step_item is None:
+                    cur = _ops.expand_dims(cur, axis=axis)
+                    axis += 1
+                elif isinstance(step_item, slice):
+                    cur = as_tensor_obj(
+                        _msc_slicing.slice(
+                            cur,
+                            axis=axis,
+                            start=step_item.start,
+                            end=step_item.stop,
+                            step=step_item.step,
+                        )
+                    )
+                    axis += 1
+                else:
+                    cur = _ops.take(cur, step_item, axis=axis)
+            return _wrap_tensor(cur)
+        finally:
+            _tracer.is_tracing = prev_tracing
 
     def __iter__(self) -> Iterator[Tensor]:
         """Iterate over the first dimension of an eager tensor.
@@ -774,7 +785,7 @@ class Tensor:
         Returns:
             Tensor: Bitwise/logical AND tensor.
         """
-        if self.dtype == DType.Bool:
+        if self.dtype == _dtypes.bool:
             return _wrap_tensor(_ops.logical_and(_to_tensor(self), _to_tensor(other)))
         return _wrap_tensor(_msc_ops.bitwise_and(_to_tensor(self), _to_tensor(other)))
 
@@ -787,7 +798,7 @@ class Tensor:
         Returns:
             Tensor: Bitwise/logical AND tensor.
         """
-        if self.dtype == DType.Bool:
+        if self.dtype == _dtypes.bool:
             return _wrap_tensor(_ops.logical_and(_to_tensor(other), _to_tensor(self)))
         return _wrap_tensor(_msc_ops.bitwise_and(_to_tensor(other), _to_tensor(self)))
 
@@ -800,7 +811,7 @@ class Tensor:
         Returns:
             Tensor: Bitwise/logical OR tensor.
         """
-        if self.dtype == DType.Bool:
+        if self.dtype == _dtypes.bool:
             return _wrap_tensor(_ops.logical_or(_to_tensor(self), _to_tensor(other)))
         return _wrap_tensor(_msc_ops.bitwise_or(_to_tensor(self), _to_tensor(other)))
 
@@ -813,7 +824,7 @@ class Tensor:
         Returns:
             Tensor: Bitwise/logical OR tensor.
         """
-        if self.dtype == DType.Bool:
+        if self.dtype == _dtypes.bool:
             return _wrap_tensor(_ops.logical_or(_to_tensor(other), _to_tensor(self)))
         return _wrap_tensor(_msc_ops.bitwise_or(_to_tensor(other), _to_tensor(self)))
 
@@ -826,7 +837,7 @@ class Tensor:
         Returns:
             Tensor: Bitwise/logical XOR tensor.
         """
-        if self.dtype == DType.Bool:
+        if self.dtype == _dtypes.bool:
             return _wrap_tensor(_ops.logical_xor(_to_tensor(self), _to_tensor(other)))
         return _wrap_tensor(_msc_ops.bitwise_xor(_to_tensor(self), _to_tensor(other)))
 
@@ -839,7 +850,7 @@ class Tensor:
         Returns:
             Tensor: Bitwise/logical XOR tensor.
         """
-        if self.dtype == DType.Bool:
+        if self.dtype == _dtypes.bool:
             return _wrap_tensor(_ops.logical_xor(_to_tensor(other), _to_tensor(self)))
         return _wrap_tensor(_msc_ops.bitwise_xor(_to_tensor(other), _to_tensor(self)))
 
@@ -849,7 +860,7 @@ class Tensor:
         Returns:
             Tensor: Inverted tensor.
         """
-        if self.dtype == DType.Bool:
+        if self.dtype == _dtypes.bool:
             return _wrap_tensor(_ops.logical_not(_to_tensor(self)))
         return _wrap_tensor(_msc_ops.bitwise_not(_to_tensor(self)))
 
@@ -941,7 +952,7 @@ class Tensor:
         """
         return _wrap_tensor(_ops.divide(_to_tensor(other), _to_tensor(self)))
 
-    def __eq__(self, other: builtins.object) -> builtins.bool:
+    def __eq__(self, other: Tensor | TensorOperand) -> builtins.bool:
         """Compute element-wise equality `self == other`.
 
         Args:
@@ -974,7 +985,7 @@ class Tensor:
         assert _is_bool_tensor(res)
         return res
 
-    def __ne__(self, other: builtins.object) -> builtins.bool:
+    def __ne__(self, other: Tensor | TensorOperand) -> builtins.bool:
         """Compute element-wise inequality `self != other`.
 
         Args:
@@ -1163,6 +1174,21 @@ class _ValueDescriptor:
         return instance
 
 
+class _ModuleTrackerProtocol:
+    """Base protocol-compatible hook for registering created `Variable`s with an active `Module`."""
+
+    def _register_variable(self, var: Variable) -> None:
+        """Register a newly created `Variable` on the active `Module`.
+
+        Args:
+            var: Newly created `Variable` instance.
+        """
+        del var
+
+
+_ACTIVE_MODULE_STACK: list[_ModuleTrackerProtocol] = []
+
+
 class Variable(Tensor):
     """A mutable Tensor whose value can be updated via assign operations."""
 
@@ -1174,6 +1200,8 @@ class Variable(Tensor):
         dtype: DTypeLike | TensorOperand = None,
         synchronization: str = "AUTO",
         aggregation: str = "NONE",
+        constraint: Callable[[Tensor], Tensor] | None = None,
+        shape: ShapeLike = None,
     ) -> None:
         """Initialize a `Variable`.
 
@@ -1184,12 +1212,22 @@ class Variable(Tensor):
             dtype: Optional target data type.
             synchronization: Variable synchronization policy string.
             aggregation: Variable aggregation policy string.
+            constraint: Optional projection function applied to variable values.
+            shape: Optional explicit shape specification.
         """
         super().__init__(initial_value, dtype=dtype)
-        self._trainable = trainable
-        self.name = name or "Variable:0"
-        self._synchronization = synchronization
-        self._aggregation = aggregation
+        if constraint is not None and self._tensor is not None:
+            self._tensor = _to_tensor(constraint(Tensor(self._tensor)), dtype=self.dtype)
+        self._trainable: builtins.bool = builtins.bool(trainable)
+        self.name: str = name or "Variable:0"
+        self._synchronization: str = str(synchronization)
+        self._aggregation: str = str(aggregation)
+        self._constraint: Callable[[Tensor], Tensor] | None = constraint
+        self._explicit_shape: ShapeTuple | None = (
+            ensure_shape_tuple(shape) if shape is not None else None
+        )
+        if _ACTIVE_MODULE_STACK:
+            _ACTIVE_MODULE_STACK[-1]._register_variable(self)
 
     @property
     def trainable(self) -> builtins.bool:
@@ -1227,7 +1265,38 @@ class Variable(Tensor):
         """
         return self._aggregation
 
+    @property
+    def constraint(self) -> Callable[[Tensor], Tensor] | None:
+        """Return the optional constraint projection function for this variable.
+
+        Returns:
+            Callable[[Tensor], Tensor] | None: Constraint callable or `None`.
+        """
+        return self._constraint
+
     value = _ValueDescriptor()
+
+    def _record_traced_mutation(self, op_type: str) -> None:
+        """Record a variable mutation operation in the active `LogicalGraph` when tracing.
+
+        Args:
+            op_type: IR operation type name.
+        """
+        if _tracer.is_tracing and _tracer.active_graph is not None and self._tensor is not None:
+            graph = _tracer.active_graph
+            nid = f"{op_type.lower()}_{uuid.uuid4().hex[:8]}"
+            graph.nodes[nid] = LogicalNode(
+                id=nid,
+                op_type="Constant",
+                inputs=[],
+                attributes={
+                    "value": _extract_constant_value(self._tensor.data),
+                    "variable_op": op_type,
+                    "variable_name": self.name,
+                },
+                shape_metadata=self.shape,
+            )
+            self._traced_node_ids[id(graph)] = nid
 
     def read_value(self) -> Tensor:
         """Return a `Tensor` snapshot of the current variable value.
@@ -1349,7 +1418,16 @@ class Variable(Tensor):
             Variable | Tensor: Updated variable (`self`) or `Tensor` snapshot.
         """
         del use_locking, name
-        self._tensor = _to_tensor(value, dtype=self.dtype)
+        prev_tracing = _tracer.is_tracing
+        _tracer.is_tracing = False
+        try:
+            target_val: Tensor | TensorOperand = (
+                self._constraint(_wrap_tensor(value)) if self._constraint is not None else value
+            )
+            self._tensor = _to_tensor(target_val, dtype=self.dtype)
+        finally:
+            _tracer.is_tracing = prev_tracing
+        self._record_traced_mutation("AssignVariableOp")
         return self if read_value else Tensor(self._tensor)
 
     def assign_add(
@@ -1371,7 +1449,18 @@ class Variable(Tensor):
             Variable | Tensor: Updated variable (`self`) or `Tensor` snapshot.
         """
         del use_locking, name
-        self._tensor = _ops.add(_to_tensor(self), _to_tensor(delta))
+        prev_tracing = _tracer.is_tracing
+        _tracer.is_tracing = False
+        try:
+            added = _ops.add(_to_tensor(self), _to_tensor(delta))
+            self._tensor = (
+                _to_tensor(self._constraint(_wrap_tensor(added)), dtype=self.dtype)
+                if self._constraint is not None
+                else added
+            )
+        finally:
+            _tracer.is_tracing = prev_tracing
+        self._record_traced_mutation("AssignAddVariableOp")
         return self if read_value else Tensor(self._tensor)
 
     def assign_sub(
@@ -1393,7 +1482,18 @@ class Variable(Tensor):
             Variable | Tensor: Updated variable (`self`) or `Tensor` snapshot.
         """
         del use_locking, name
-        self._tensor = _ops.subtract(_to_tensor(self), _to_tensor(delta))
+        prev_tracing = _tracer.is_tracing
+        _tracer.is_tracing = False
+        try:
+            subbed = _ops.subtract(_to_tensor(self), _to_tensor(delta))
+            self._tensor = (
+                _to_tensor(self._constraint(_wrap_tensor(subbed)), dtype=self.dtype)
+                if self._constraint is not None
+                else subbed
+            )
+        finally:
+            _tracer.is_tracing = prev_tracing
+        self._record_traced_mutation("AssignSubVariableOp")
         return self if read_value else Tensor(self._tensor)
 
     def _scatter_op(
@@ -1412,15 +1512,21 @@ class Variable(Tensor):
         Returns:
             Variable: Updated variable (`self`).
         """
-        raw_base = self.numpy()
-        py_base = raw_base.tolist() if isinstance(raw_base, ArrayLikeProtocol) else [raw_base]
-        base_list: list[NestedTensorData] = py_base if isinstance(py_base, list) else [py_base]
-        idx_t = Tensor(indices).numpy()
-        py_idx = idx_t.tolist() if isinstance(idx_t, ArrayLikeProtocol) else idx_t
-        upd_t = Tensor(updates).numpy()
-        py_upd = upd_t.tolist() if isinstance(upd_t, ArrayLikeProtocol) else upd_t
-        updated = _apply_scatter_1d(base_list, py_idx, py_upd, mode=mode)
-        self._tensor = _to_tensor(updated, dtype=self.dtype)
+        prev_tracing = _tracer.is_tracing
+        _tracer.is_tracing = False
+        try:
+            raw_base = self.numpy()
+            py_base = raw_base.tolist() if isinstance(raw_base, ArrayLikeProtocol) else [raw_base]
+            base_list: list[NestedTensorData] = py_base if isinstance(py_base, list) else [py_base]
+            idx_t = Tensor(indices).numpy()
+            py_idx = idx_t.tolist() if isinstance(idx_t, ArrayLikeProtocol) else idx_t
+            upd_t = Tensor(updates).numpy()
+            py_upd = upd_t.tolist() if isinstance(upd_t, ArrayLikeProtocol) else upd_t
+            updated = _apply_scatter_1d(base_list, py_idx, py_upd, mode=mode)
+            self._tensor = _to_tensor(updated, dtype=self.dtype)
+        finally:
+            _tracer.is_tracing = prev_tracing
+        self._record_traced_mutation(f"ResourceScatterNd{mode.capitalize()}")
         return self
 
     def scatter_nd_update(
@@ -1697,6 +1803,8 @@ class _TracingContext:
 __all__ = [
     "Tensor",
     "Variable",
+    "_ACTIVE_MODULE_STACK",
+    "_ModuleTrackerProtocol",
     "_TensorRef",
     "_TracingContext",
     "_extract_constant_value",

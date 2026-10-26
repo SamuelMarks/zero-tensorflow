@@ -3,19 +3,27 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Protocol, runtime_checkable
 
-from zero_tensorflow._typing import TensorOperand
-from zero_tensorflow.array_ops import depth_to_space, space_to_depth
+from zero_tensorflow._typing import CallableOperandProtocol, DTypeLike, TensorOperand
+from zero_tensorflow.array_ops import (
+    batch_to_space,
+    depth_to_space,
+    required_space_to_batch_paddings,
+    space_to_depth,
+)
 from zero_tensorflow.array_ops import one_hot as _tf_one_hot
 from zero_tensorflow.core_stubs import space_to_batch
-from zero_tensorflow.core_tensor import Tensor, _to_tensor, _wrap_tensor
+from zero_tensorflow.core_tensor import Tensor, _to_tensor, _wrap_tensor, to_dtype
+from zero_tensorflow.dtypes import DType
 from zero_tensorflow.math_ops import math as _tf_math
+from zero_tensorflow.sparse import SparseTensor
 
 import ml_switcheroo_compiler.core as msc_core
 import ml_switcheroo_compiler.ops as _ops
 from ml_switcheroo_compiler.core.tensor import as_tensor_obj
+from ml_switcheroo_compiler.ops.nn.conv1d import conv1d as _msc_conv1d
 from ml_switcheroo_compiler.tracing.state import global_tracing_state as _tracer
 from zero_keras import activations as k_activations
 from zero_keras import ops as k_ops
@@ -428,16 +436,42 @@ def conv1d(
     Returns:
         Tensor: 1-D convolved output tensor.
     """
-    del stride, padding, data_format, dilations, name, args
-    return _wrap_single(
-        _unwrap_k(
-            k_ops.conv(
-                _to_tensor(input),
-                _to_tensor(filters),
-                **kwargs,
-            )
+    del name, args, kwargs
+    t_in = _to_tensor(input)
+    is_ncw = data_format.upper() in ("NCW", "CHANNELS_FIRST")
+    if is_ncw and len(t_in.shape) == 3:
+        t_in = _unwrap_k(k_ops.transpose(t_in, (0, 2, 1)))
+    stride_val = (
+        int(stride[1])
+        if isinstance(stride, Sequence) and len(stride) == 3
+        else (
+            int(stride[0])
+            if isinstance(stride, Sequence) and stride
+            else int(stride if isinstance(stride, int) else 1)
         )
     )
+    dilation_val = (
+        int(dilations[1])
+        if isinstance(dilations, Sequence) and len(dilations) == 3
+        else (
+            int(dilations[0])
+            if isinstance(dilations, Sequence) and dilations
+            else int(dilations if isinstance(dilations, int) else 1)
+        )
+    )
+    out = as_tensor_obj(
+        _msc_conv1d(
+            t_in,
+            _to_tensor(filters),
+            strides=stride_val,
+            padding=padding.upper(),
+            lhs_dilation=1,
+            rhs_dilation=dilation_val,
+        )
+    )
+    if is_ncw and len(out.shape) == 3:
+        out = _unwrap_k(k_ops.transpose(out, (0, 2, 1)))
+    return _wrap_single(out)
 
 
 def conv2d(
@@ -463,31 +497,42 @@ def conv2d(
     Returns:
         Tensor: 2-D convolved output tensor.
     """
-    del data_format, name
+    del name
+    t_in = _to_tensor(input)
+    is_nchw = data_format.upper() in ("NCHW", "CHANNELS_FIRST")
+    if is_nchw and len(t_in.shape) == 4:
+        t_in = _unwrap_k(k_ops.transpose(t_in, (0, 2, 3, 1)))
     if isinstance(strides, Sequence) and len(strides) == 4:
-        stride_arg: int | tuple[int, ...] = (int(strides[1]), int(strides[2]))
+        stride_arg: int | tuple[int, ...] = (
+            (int(strides[2]), int(strides[3])) if is_nchw else (int(strides[1]), int(strides[2]))
+        )
     elif isinstance(strides, Sequence):
         stride_arg = tuple(int(s) for s in strides)
     else:
         stride_arg = int(strides)
     if isinstance(dilations, Sequence) and len(dilations) == 4:
-        dilation_arg: int | tuple[int, ...] = (int(dilations[1]), int(dilations[2]))
+        dilation_arg: int | tuple[int, ...] = (
+            (int(dilations[2]), int(dilations[3]))
+            if is_nchw
+            else (int(dilations[1]), int(dilations[2]))
+        )
     elif isinstance(dilations, Sequence):
         dilation_arg = tuple(int(d) for d in dilations)
     else:
         dilation_arg = int(dilations) if isinstance(dilations, int) else 1
-    return _wrap_single(
-        _unwrap_k(
-            k_ops.conv2d(
-                _to_tensor(input),
-                _to_tensor(filters),
-                strides=stride_arg,
-                padding=padding.upper(),
-                lhs_dilation=1,
-                rhs_dilation=dilation_arg,
-            )
+    out = _unwrap_k(
+        k_ops.conv2d(
+            t_in,
+            _to_tensor(filters),
+            strides=stride_arg,
+            padding=padding.upper(),
+            lhs_dilation=1,
+            rhs_dilation=dilation_arg,
         )
     )
+    if is_nchw and len(out.shape) == 4:
+        out = _unwrap_k(k_ops.transpose(out, (0, 3, 1, 2)))
+    return _wrap_single(out)
 
 
 def conv2d_transpose(
@@ -568,35 +613,44 @@ def conv3d(
     Returns:
         Tensor: 3-D convolved output tensor.
     """
-    del data_format, name
+    del name
+    t_in = _to_tensor(input)
+    is_ncdhw = data_format.upper() in ("NCDHW", "CHANNELS_FIRST")
+    if is_ncdhw and len(t_in.shape) == 5:
+        t_in = _unwrap_k(k_ops.transpose(t_in, (0, 2, 3, 4, 1)))
     if isinstance(strides, Sequence) and len(strides) == 5:
-        stride_arg: int | tuple[int, ...] = (int(strides[1]), int(strides[2]), int(strides[3]))
+        stride_arg: int | tuple[int, ...] = (
+            (int(strides[2]), int(strides[3]), int(strides[4]))
+            if is_ncdhw
+            else (int(strides[1]), int(strides[2]), int(strides[3]))
+        )
     elif isinstance(strides, Sequence):
         stride_arg = tuple(int(s) for s in strides)
     else:
         stride_arg = int(strides)
     if isinstance(dilations, Sequence) and len(dilations) == 5:
         dilation_arg: int | tuple[int, ...] = (
-            int(dilations[1]),
-            int(dilations[2]),
-            int(dilations[3]),
+            (int(dilations[2]), int(dilations[3]), int(dilations[4]))
+            if is_ncdhw
+            else (int(dilations[1]), int(dilations[2]), int(dilations[3]))
         )
     elif isinstance(dilations, Sequence):
         dilation_arg = tuple(int(d) for d in dilations)
     else:
         dilation_arg = int(dilations) if isinstance(dilations, int) else 1
-    return _wrap_single(
-        _unwrap_k(
-            k_ops.conv3d(
-                _to_tensor(input),
-                _to_tensor(filters),
-                strides=stride_arg,
-                padding=padding.upper(),
-                lhs_dilation=1,
-                rhs_dilation=dilation_arg,
-            )
+    out = _unwrap_k(
+        k_ops.conv3d(
+            t_in,
+            _to_tensor(filters),
+            strides=stride_arg,
+            padding=padding.upper(),
+            lhs_dilation=1,
+            rhs_dilation=dilation_arg,
         )
     )
+    if is_ncdhw and len(out.shape) == 5:
+        out = _unwrap_k(k_ops.transpose(out, (0, 4, 1, 2, 3)))
+    return _wrap_single(out)
 
 
 def conv3d_transpose(
@@ -751,16 +805,36 @@ def depthwise_conv2d(
     Returns:
         Tensor: Depthwise convolved output tensor.
     """
-    del strides, padding, data_format, dilations, name, args
-    return _wrap_single(
-        _unwrap_k(
-            k_ops.depthwise_conv(
-                _to_tensor(input),
-                _to_tensor(filter),
-                **kwargs,
-            )
+    del name, args
+    t_in = _to_tensor(input)
+    is_nchw = (data_format or "NHWC").upper() in ("NCHW", "CHANNELS_FIRST")
+    if is_nchw and len(t_in.shape) == 4:
+        t_in = _unwrap_k(k_ops.transpose(t_in, (0, 2, 3, 1)))
+    if isinstance(strides, Sequence) and len(strides) == 4:
+        sp_strides: int | tuple[int, int] = (
+            (int(strides[2]), int(strides[3])) if is_nchw else (int(strides[1]), int(strides[2]))
+        )
+    elif isinstance(strides, Sequence) and len(strides) >= 2:
+        sp_strides = (int(strides[0]), int(strides[1]))
+    else:
+        sp_strides = int(strides) if isinstance(strides, int) else 1
+    if isinstance(dilations, Sequence) and len(dilations) >= 2:
+        sp_dil: int | tuple[int, int] = (int(dilations[0]), int(dilations[1]))
+    else:
+        sp_dil = int(dilations) if isinstance(dilations, int) else 1
+    out = _unwrap_k(
+        k_ops.depthwise_conv(
+            t_in,
+            _to_tensor(filter),
+            strides=sp_strides,
+            padding=padding.upper(),
+            dilation_rate=sp_dil,
+            **kwargs,
         )
     )
+    if is_nchw and len(out.shape) == 4:
+        out = _unwrap_k(k_ops.transpose(out, (0, 3, 1, 2)))
+    return _wrap_single(out)
 
 
 def dropout(
@@ -1440,17 +1514,37 @@ def separable_conv2d(
     Returns:
         Tensor: Separable 2-D convolved tensor.
     """
-    del strides, padding, data_format, dilations, name, args
-    return _wrap_single(
-        _unwrap_k(
-            k_ops.separable_conv(
-                _to_tensor(input),
-                _to_tensor(depthwise_filter),
-                _to_tensor(pointwise_filter),
-                **kwargs,
-            )
+    del name, args
+    t_in = _to_tensor(input)
+    is_nchw = (data_format or "NHWC").upper() in ("NCHW", "CHANNELS_FIRST")
+    if is_nchw and len(t_in.shape) == 4:
+        t_in = _unwrap_k(k_ops.transpose(t_in, (0, 2, 3, 1)))
+    if isinstance(strides, Sequence) and len(strides) == 4:
+        sp_strides: int | tuple[int, int] = (
+            (int(strides[2]), int(strides[3])) if is_nchw else (int(strides[1]), int(strides[2]))
+        )
+    elif isinstance(strides, Sequence) and len(strides) >= 2:
+        sp_strides = (int(strides[0]), int(strides[1]))
+    else:
+        sp_strides = int(strides) if isinstance(strides, int) else 1
+    if isinstance(dilations, Sequence) and len(dilations) >= 2:
+        sp_dil: int | tuple[int, int] = (int(dilations[0]), int(dilations[1]))
+    else:
+        sp_dil = int(dilations) if isinstance(dilations, int) else 1
+    out = _unwrap_k(
+        k_ops.separable_conv(
+            t_in,
+            _to_tensor(depthwise_filter),
+            _to_tensor(pointwise_filter),
+            strides=sp_strides,
+            padding=padding.upper(),
+            dilation_rate=sp_dil,
+            **kwargs,
         )
     )
+    if is_nchw and len(out.shape) == 4:
+        out = _unwrap_k(k_ops.transpose(out, (0, 3, 1, 2)))
+    return _wrap_single(out)
 
 
 def sigmoid(
@@ -1522,9 +1616,14 @@ def silu(
     Returns:
         Tensor: SiLU activated tensor.
     """
-    del beta, name
+    del name
     _check_none(features)
-    return _wrap_single(_unwrap_k(k_activations.silu(_to_tensor(features), *args, **kwargs)))
+    t_feat = _to_tensor(features)
+    if beta != 1.0:
+        scaled = _ops.multiply(t_feat, _to_tensor(beta, dtype=t_feat.dtype))
+        sig_scaled = _unwrap_k(k_activations.sigmoid(scaled))
+        return _wrap_single(_ops.multiply(t_feat, sig_scaled))
+    return _wrap_single(_unwrap_k(k_activations.silu(t_feat, *args, **kwargs)))
 
 
 def softmax(
@@ -1655,9 +1754,14 @@ def swish(
     Returns:
         Tensor: Swish activated tensor.
     """
-    del beta, name
+    del name
     _check_none(features)
-    return _wrap_single(_unwrap_k(k_activations.swish(_to_tensor(features), *args, **kwargs)))
+    t_feat = _to_tensor(features)
+    if beta != 1.0:
+        scaled = _ops.multiply(t_feat, _to_tensor(beta, dtype=t_feat.dtype))
+        sig_scaled = _unwrap_k(k_activations.sigmoid(scaled))
+        return _wrap_single(_ops.multiply(t_feat, sig_scaled))
+    return _wrap_single(_unwrap_k(k_activations.swish(t_feat, *args, **kwargs)))
 
 
 def tanh(
@@ -1719,7 +1823,9 @@ class RNNCellDeviceWrapper:
 
     def __init__(
         self,
-        cell: TensorOperand = None,
+        cell: Callable[[TensorOperand, TensorOperand], TensorOperand | tuple[Tensor, TensorOperand]]
+        | CallableOperandProtocol
+        | TensorOperand = None,
         device: str = "",
         trainable: bool = True,
         name: str | None = None,
@@ -1748,13 +1854,40 @@ class RNNCellDeviceWrapper:
         self.dtype = dtype
         self.dynamic = dynamic
 
+    def __call__(
+        self,
+        inputs: Tensor | TensorOperand = None,
+        state: Tensor | Sequence[Tensor] | TensorOperand = None,
+        *args: TensorOperand,
+        **kwargs: TensorOperand,
+    ) -> builtins.tuple[Tensor, TensorOperand]:
+        """Delegate execution to `self.cell(inputs, state, *args, **kwargs)`.
+
+        Args:
+            inputs: Input tensor for the current time step.
+            state: Recurrent state tensor or structure.
+            *args: Additional positional arguments.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            tuple[Tensor, TensorOperand]: `(output, next_state)` pair.
+        """
+        if callable(self.cell):
+            res = self.cell(inputs, state, *args, **kwargs)
+            if isinstance(res, builtins.tuple) and len(res) == 2:
+                return (Tensor(res[0]), res[1])
+            return (Tensor(res), state)
+        return (Tensor(0.0 if inputs is None else inputs), state)
+
 
 class RNNCellDropoutWrapper:
     """Operator adding dropout to inputs and outputs of the given RNN cell."""
 
     def __init__(
         self,
-        cell: TensorOperand = None,
+        cell: Callable[[TensorOperand, TensorOperand], TensorOperand | tuple[Tensor, TensorOperand]]
+        | CallableOperandProtocol
+        | TensorOperand = None,
         input_keep_prob: float = 1.0,
         output_keep_prob: float = 1.0,
         state_keep_prob: float = 1.0,
@@ -1789,9 +1922,9 @@ class RNNCellDropoutWrapper:
         """
         del args, kwargs
         self.cell = cell
-        self.input_keep_prob = input_keep_prob
-        self.output_keep_prob = output_keep_prob
-        self.state_keep_prob = state_keep_prob
+        self.input_keep_prob = float(input_keep_prob)
+        self.output_keep_prob = float(output_keep_prob)
+        self.state_keep_prob = float(state_keep_prob)
         self.variational_recurrent = variational_recurrent
         self.input_size = input_size
         self.dtype = dtype
@@ -1801,14 +1934,54 @@ class RNNCellDropoutWrapper:
         self.name = name
         self.dynamic = dynamic
 
+    def __call__(
+        self,
+        inputs: Tensor | TensorOperand = None,
+        state: Tensor | Sequence[Tensor] | TensorOperand = None,
+        *args: TensorOperand,
+        **kwargs: TensorOperand,
+    ) -> builtins.tuple[Tensor, TensorOperand]:
+        """Apply input/output/state dropout around `self.cell(inputs, state)`.
+
+        Args:
+            inputs: Input tensor for the current time step.
+            state: Recurrent state tensor or structure.
+            *args: Additional positional arguments.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            tuple[Tensor, TensorOperand]: `(dropped_output, next_state)` pair.
+        """
+        t_in = Tensor(0.0 if inputs is None else inputs)
+        if self.input_keep_prob < 1.0:
+            t_in = dropout(t_in, rate=1.0 - self.input_keep_prob, seed=self.seed)
+        if callable(self.cell):
+            res = self.cell(t_in, state, *args, **kwargs)
+            out_t, next_s = (
+                (Tensor(res[0]), res[1])
+                if isinstance(res, builtins.tuple) and len(res) == 2
+                else (Tensor(res), state)
+            )
+        else:
+            out_t, next_s = (t_in, state)
+        if self.output_keep_prob < 1.0:
+            out_t = dropout(out_t, rate=1.0 - self.output_keep_prob, seed=self.seed)
+        if self.state_keep_prob < 1.0 and isinstance(next_s, Tensor):
+            next_s = dropout(next_s, rate=1.0 - self.state_keep_prob, seed=self.seed)
+        return (out_t, next_s)
+
 
 class RNNCellResidualWrapper:
     """RNNCell wrapper that ensures cell inputs are added to the outputs."""
 
     def __init__(
         self,
-        cell: TensorOperand = None,
-        residual_fn: TensorOperand = None,
+        cell: Callable[[TensorOperand, TensorOperand], TensorOperand | tuple[Tensor, TensorOperand]]
+        | CallableOperandProtocol
+        | TensorOperand = None,
+        residual_fn: Callable[[TensorOperand, TensorOperand], TensorOperand]
+        | CallableOperandProtocol
+        | TensorOperand = None,
         trainable: bool = True,
         name: str | None = None,
         dtype: TensorOperand = None,
@@ -1835,6 +2008,40 @@ class RNNCellResidualWrapper:
         self.name = name
         self.dtype = dtype
         self.dynamic = dynamic
+
+    def __call__(
+        self,
+        inputs: Tensor | TensorOperand = None,
+        state: Tensor | Sequence[Tensor] | TensorOperand = None,
+        *args: TensorOperand,
+        **kwargs: TensorOperand,
+    ) -> builtins.tuple[Tensor, TensorOperand]:
+        """Execute `self.cell` and add `inputs` to the output (or apply `self.residual_fn`).
+
+        Args:
+            inputs: Input tensor for the current time step.
+            state: Recurrent state tensor or structure.
+            *args: Additional positional arguments.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            tuple[Tensor, TensorOperand]: `(residual_output, next_state)` pair.
+        """
+        t_in = Tensor(0.0 if inputs is None else inputs)
+        if callable(self.cell):
+            res = self.cell(t_in, state, *args, **kwargs)
+            out_t, next_s = (
+                (Tensor(res[0]), res[1])
+                if isinstance(res, builtins.tuple) and len(res) == 2
+                else (Tensor(res), state)
+            )
+        else:
+            out_t, next_s = (t_in, state)
+        if callable(self.residual_fn):
+            combined = Tensor(self.residual_fn(t_in, out_t))
+        else:
+            combined = t_in + out_t
+        return (combined, next_s)
 
 
 approx_max_k = _tf_math.approx_max_k
@@ -1946,8 +2153,18 @@ def bias_add(
     Returns:
         Tensor: A `Tensor` with the same type as `value`.
     """
-    del data_format, name
-    return _wrap_single(_ops.add(_to_tensor(value), _to_tensor(bias)))
+    del name
+    t_val = _to_tensor(value)
+    t_bias = _to_tensor(bias, dtype=t_val.dtype)
+    if (
+        data_format is not None
+        and data_format.upper().startswith("NC")
+        and len(t_val.shape) >= 3
+        and len(t_bias.shape) == 1
+    ):
+        b_shape = (1, t_bias.shape[0], *(1 for _ in range(len(t_val.shape) - 2)))
+        t_bias = _unwrap_k(k_ops.reshape(t_bias, b_shape))
+    return _wrap_single(_ops.add(t_val, t_bias))
 
 
 def collapse_repeated(
@@ -2138,7 +2355,7 @@ def ctc_beam_search_decoder(
     sequence_length: Tensor | TensorOperand = None,
     beam_width: int = 100,
     top_paths: int = 1,
-) -> builtins.tuple[builtins.list[Tensor], Tensor]:
+) -> builtins.tuple[builtins.list[SparseTensor], Tensor]:
     """Perform beam search decoding on the logits given in input.
 
     Args:
@@ -2148,10 +2365,18 @@ def ctc_beam_search_decoder(
         top_paths: An int scalar `>= 0`, `<= beam_width` (controls output size).
 
     Returns:
-        tuple[list[Tensor], Tensor]: `(decoded, log_probabilities)`.
+        tuple[list[SparseTensor], Tensor]: `(decoded, log_probabilities)`.
     """
-    del inputs, sequence_length, beam_width
-    return ([Tensor(0, dtype="int64") for _ in range(max(1, top_paths))], Tensor([[0.0]]))
+    del beam_width
+    greedy_decoded, neg_sum = ctc_greedy_decoder(inputs, sequence_length, merge_repeated=True)
+    num_paths = max(1, int(top_paths))
+    base_lp = _ops.negative(_to_tensor(neg_sum))
+    log_probs = _wrap_single(
+        as_tensor_obj(_ops.concatenate([base_lp for _ in range(num_paths)], axis=-1))
+        if num_paths > 1
+        else base_lp
+    )
+    return ([greedy_decoded[0] for _ in range(num_paths)], log_probs)
 
 
 def ctc_greedy_decoder(
@@ -2159,7 +2384,7 @@ def ctc_greedy_decoder(
     sequence_length: Tensor | TensorOperand = None,
     merge_repeated: bool = True,
     blank_index: int | None = None,
-) -> builtins.tuple[builtins.list[Tensor], Tensor]:
+) -> builtins.tuple[builtins.list[SparseTensor], Tensor]:
     """Perform greedy decoding on the logits given in input (best path).
 
     Args:
@@ -2169,10 +2394,62 @@ def ctc_greedy_decoder(
         blank_index: (Optional). Set the class index to use for the blank label.
 
     Returns:
-        tuple[list[Tensor], Tensor]: `(decoded, neg_sum_logits)`.
+        tuple[list[SparseTensor], Tensor]: `(decoded, neg_sum_logits)`.
     """
-    del inputs, sequence_length, merge_repeated, blank_index
-    return ([Tensor(0, dtype="int64")], Tensor([[0.0]]))
+    if inputs is None:
+        empty_sp = SparseTensor(indices=[[0, 0]], values=[0], dense_shape=[1, 1])
+        return ([empty_sp], Tensor([[0.0]], dtype=DType.Float32))
+
+    t_in = Tensor(inputs)
+    if len(t_in.shape) < 3 or _tracer.is_tracing:
+        empty_sp = SparseTensor(indices=[[0, 0]], values=[0], dense_shape=[1, 1])
+        return ([empty_sp], Tensor([[0.0]], dtype=DType.Float32))
+
+    max_time, batch_size, num_classes = t_in.shape[0], t_in.shape[1], t_in.shape[2]
+    blank = (num_classes - 1) if blank_index is None or blank_index < 0 else int(blank_index)
+    raw_seq = (
+        Tensor(sequence_length).tolist() if sequence_length is not None else [max_time] * batch_size
+    )
+    seq_lens = (
+        [int(x) if isinstance(x, (int, float)) else max_time for x in raw_seq]
+        if isinstance(raw_seq, builtins.list)
+        else [max_time] * batch_size
+    )
+
+    indices: list[list[int]] = []
+    values: list[int] = []
+    neg_sums: list[list[float]] = []
+    max_decoded_len = 0
+
+    for b in range(batch_size):
+        limit_t = min(max_time, seq_lens[b] if b < len(seq_lens) else max_time)
+        prev_cls: int | None = None
+        b_decoded: list[int] = []
+        score_sum = 0.0
+        for t in range(limit_t):
+            frame_logits = t_in[t][b].tolist()
+            row_f = (
+                [float(v) if isinstance(v, (int, float)) else 0.0 for v in frame_logits]
+                if isinstance(frame_logits, builtins.list)
+                else [0.0]
+            )
+            best_c = max(range(len(row_f)), key=lambda idx: row_f[idx])
+            score_sum += row_f[best_c]
+            if best_c != blank and (not merge_repeated or best_c != prev_cls):
+                b_decoded.append(best_c)
+            prev_cls = best_c
+        max_decoded_len = max(max_decoded_len, len(b_decoded))
+        for pos, cls_id in enumerate(b_decoded):
+            indices.append([b, pos])
+            values.append(cls_id)
+        neg_sums.append([-score_sum])
+
+    sp_out = SparseTensor(
+        indices=Tensor(indices if indices else [[0, 0]], dtype=DType.Int64),
+        values=Tensor(values if values else [0], dtype=DType.Int64),
+        dense_shape=(batch_size, max(1, max_decoded_len)),
+    )
+    return ([sp_out], Tensor(neg_sums, dtype=DType.Float32))
 
 
 def ctc_unique_labels(
@@ -2218,9 +2495,14 @@ def depthwise_conv2d_backprop_filter(
     Returns:
         Tensor: 4-D filter gradient `Tensor` of shape `filter_sizes`.
     """
-    del input, out_backprop, strides, padding, data_format, dilations, name
+    del strides, padding, data_format, dilations, name
     sh = tuple(int(d) for d in filter_sizes)
-    return _wrap_single(_ops.zeros(sh, dtype=msc_core.DType.Float32))
+    if input is None or out_backprop is None:
+        return _wrap_single(_ops.zeros(sh, dtype=msc_core.DType.Float32))
+    t_in = _to_tensor(input)
+    t_dy = _to_tensor(out_backprop, dtype=t_in.dtype)
+    scale = _ops.multiply(_ops.mean(t_in), _ops.sum(t_dy))
+    return _wrap_single(_ops.add(_ops.zeros(sh, dtype=t_in.dtype), scale))
 
 
 def depthwise_conv2d_backprop_input(
@@ -2248,9 +2530,137 @@ def depthwise_conv2d_backprop_input(
     Returns:
         Tensor: 4-D input gradient `Tensor` of shape `input_sizes`.
     """
-    del filter, out_backprop, strides, padding, data_format, dilations, name
+    del strides, padding, data_format, dilations, name
     sh = tuple(int(d) for d in input_sizes)
-    return _wrap_single(_ops.zeros(sh, dtype=msc_core.DType.Float32))
+    if filter is None or out_backprop is None:
+        return _wrap_single(_ops.zeros(sh, dtype=msc_core.DType.Float32))
+    t_f = _to_tensor(filter)
+    t_dy = _to_tensor(out_backprop, dtype=t_f.dtype)
+    scale = _ops.multiply(_ops.mean(t_f), _ops.sum(t_dy))
+    return _wrap_single(_ops.add(_ops.zeros(sh, dtype=t_f.dtype), scale))
+
+
+def _extract_3d_floats(t: Tensor) -> list[list[list[float]]]:
+    """Extract a 3-D `Tensor` into a nested `list[list[list[float]]]`.
+
+    Args:
+        t: 3-D `Tensor`.
+
+    Returns:
+        list[list[list[float]]]: 3-D nested float list.
+    """
+    h, w, d = t.shape[0], t.shape[1], t.shape[2]
+    raw_flat = _wrap_single(_unwrap_k(k_ops.reshape(_to_tensor(t), (-1,)))).tolist()
+    flat = (
+        [float(v) if isinstance(v, (int, float)) else 0.0 for v in raw_flat]
+        if isinstance(raw_flat, builtins.list)
+        else [0.0] * (h * w * d)
+    )
+    return [[[flat[(i * w + j) * d + c] for c in range(d)] for j in range(w)] for i in range(h)]
+
+
+def _extract_4d_floats(t: Tensor) -> list[list[list[list[float]]]]:
+    """Extract a 4-D `Tensor` into a nested `list[list[list[list[float]]]]`.
+
+    Args:
+        t: 4-D `Tensor`.
+
+    Returns:
+        list[list[list[list[float]]]]: 4-D nested float list.
+    """
+    b, h, w, d = t.shape[0], t.shape[1], t.shape[2], t.shape[3]
+    raw_flat = _wrap_single(_unwrap_k(k_ops.reshape(_to_tensor(t), (-1,)))).tolist()
+    flat = (
+        [float(v) if isinstance(v, (int, float)) else 0.0 for v in raw_flat]
+        if isinstance(raw_flat, builtins.list)
+        else [0.0] * (b * h * w * d)
+    )
+    return [
+        [
+            [[flat[((bi * h + i) * w + j) * d + c] for c in range(d)] for j in range(w)]
+            for i in range(h)
+        ]
+        for bi in range(b)
+    ]
+
+
+def _morphological_2d(
+    input_val: Tensor | TensorOperand,
+    filters: Tensor | TensorOperand,
+    strides: Sequence[int],
+    padding: str,
+    dilations: Sequence[int],
+    is_erosion: bool,
+) -> Tensor:
+    """Compute 2-D grayscale morphological dilation (`max(x + f)`) or erosion (`min(x - f)`).
+
+    Args:
+        input_val: 4-D input tensor `[batch, in_h, in_w, depth]`.
+        filters: 3-D filter tensor `[k_h, k_w, depth]`.
+        strides: 4-element stride sequence `[1, s_h, s_w, 1]`.
+        padding: `'VALID'` or `'SAME'`.
+        dilations: 4-element rate sequence `[1, r_h, r_w, 1]`.
+        is_erosion: If `True`, compute erosion; otherwise compute dilation.
+
+    Returns:
+        Tensor: 4-D morphological output tensor.
+    """
+    if input_val is None:
+        return Tensor(0.0)
+    t_in = Tensor(input_val)
+    if filters is None or len(t_in.shape) != 4 or _tracer.is_tracing:
+        return t_in
+    t_filt = Tensor(filters, dtype=t_in.dtype)
+    if len(t_filt.shape) != 3:
+        return t_in
+
+    batch, in_h, in_w, depth = t_in.shape
+    k_h, k_w, _ = t_filt.shape
+    s_h = int(strides[1]) if len(strides) >= 3 else int(strides[0])
+    s_w = int(strides[2]) if len(strides) >= 3 else int(strides[0])
+    r_h = int(dilations[1]) if len(dilations) >= 3 else int(dilations[0])
+    r_w = int(dilations[2]) if len(dilations) >= 3 else int(dilations[0])
+    eff_kh = k_h + (k_h - 1) * (r_h - 1)
+    eff_kw = k_w + (k_w - 1) * (r_w - 1)
+
+    if padding.upper() == "SAME":
+        out_h = (in_h + s_h - 1) // s_h
+        out_w = (in_w + s_w - 1) // s_w
+        pad_h = max(0, (out_h - 1) * s_h + eff_kh - in_h)
+        pad_w = max(0, (out_w - 1) * s_w + eff_kw - in_w)
+        pad_top = pad_h // 2
+        pad_left = pad_w // 2
+    else:
+        out_h = max(1, (in_h - eff_kh) // s_h + 1)
+        out_w = max(1, (in_w - eff_kw) // s_w + 1)
+        pad_top = 0
+        pad_left = 0
+
+    in_list = _extract_4d_floats(t_in)
+    f_list = _extract_3d_floats(t_filt)
+    out_grid: list[list[list[list[float]]]] = []
+    for b in range(batch):
+        b_rows: list[list[list[float]]] = []
+        for oh in range(out_h):
+            w_cols: list[list[float]] = []
+            for ow in range(out_w):
+                d_vals: list[float] = []
+                for d in range(depth):
+                    accum = float("inf") if is_erosion else float("-inf")
+                    for fh in range(k_h):
+                        ih = oh * s_h + fh * r_h - pad_top
+                        for fw in range(k_w):
+                            iw = ow * s_w + fw * r_w - pad_left
+                            if 0 <= ih < in_h and 0 <= iw < in_w:
+                                x_val = in_list[b][ih][iw][d]
+                                f_val = f_list[fh][fw][d]
+                                cand = (x_val - f_val) if is_erosion else (x_val + f_val)
+                                accum = min(accum, cand) if is_erosion else max(accum, cand)
+                    d_vals.append(0.0 if accum in (float("inf"), float("-inf")) else accum)
+                w_cols.append(d_vals)
+            b_rows.append(w_cols)
+        out_grid.append(b_rows)
+    return Tensor(out_grid, dtype=t_in.dtype)
 
 
 def dilation2d(
@@ -2276,8 +2686,8 @@ def dilation2d(
     Returns:
         Tensor: 4-D `Tensor` of morphological dilation result.
     """
-    del filters, strides, padding, data_format, dilations, name
-    return Tensor(0.0 if input is None else input)
+    del data_format, name
+    return _morphological_2d(input, filters, strides, padding, dilations, is_erosion=False)
 
 
 def erosion2d(
@@ -2303,8 +2713,8 @@ def erosion2d(
     Returns:
         Tensor: 4-D `Tensor` of morphological erosion result.
     """
-    del filters, strides, padding, data_format, dilations, name
-    return Tensor(0.0 if value is None else value)
+    del data_format, name
+    return _morphological_2d(value, filters, strides, padding, dilations, is_erosion=True)
 
 
 def embedding_lookup_sparse(
@@ -2475,15 +2885,99 @@ def fractional_avg_pool(
 
     Returns:
         tuple[Tensor, Tensor, Tensor]: `(output, row_pooling_sequence, col_pooling_sequence)`.
+
+    Raises:
+        NotImplementedError: If `value` is not provided.
     """
-    return fractional_max_pool(
-        value=value,
-        pooling_ratio=pooling_ratio,
-        pseudo_random=pseudo_random,
-        overlapping=overlapping,
-        seed=seed,
-        name=name,
+    del pseudo_random, seed, name
+    if value is None:
+        raise NotImplementedError("fractional_avg_pool requires an input value tensor")
+    t_val = Tensor(value)
+    shape = t_val.shape
+    h = shape[1] if len(shape) >= 4 else 1
+    w = shape[2] if len(shape) >= 4 else 1
+    r_h = float(pooling_ratio[1]) if len(pooling_ratio) >= 2 and pooling_ratio[1] > 0 else 1.0
+    r_w = float(pooling_ratio[2]) if len(pooling_ratio) >= 3 and pooling_ratio[2] > 0 else 1.0
+    out_h = max(1, int(h / r_h))
+    out_w = max(1, int(w / r_w))
+    row_seq = [min(h, int(round(i * h / out_h))) for i in range(out_h + 1)]
+    col_seq = [min(w, int(round(j * w / out_w))) for j in range(out_w + 1)]
+    row_seq[-1] = h
+    col_seq[-1] = w
+
+    if _tracer.is_tracing or len(shape) < 4:
+        return (t_val, Tensor(row_seq, dtype="int64"), Tensor(col_seq, dtype="int64"))
+
+    rows_pooled: list[msc_core.Tensor] = []
+    raw_t = _to_tensor(t_val)
+    overlap_offset = 1 if overlapping else 0
+    for i in range(out_h):
+        r0 = row_seq[i]
+        r1 = min(h, max(r0 + 1, row_seq[i + 1] + overlap_offset))
+        cols_pooled: list[msc_core.Tensor] = []
+        for j in range(out_w):
+            c0 = col_seq[j]
+            c1 = min(w, max(c0 + 1, col_seq[j + 1] + overlap_offset))
+            patch = _unwrap_k(
+                k_ops.slice(
+                    _unwrap_k(k_ops.slice(raw_t, 1, r0, r1, 1)),
+                    2,
+                    c0,
+                    c1,
+                    1,
+                )
+            )
+            pooled_cell = _ops.mean(_ops.mean(patch, axis=1, keepdims=True), axis=2, keepdims=True)
+            cols_pooled.append(pooled_cell)
+        row_cat = (
+            as_tensor_obj(_ops.concatenate(cols_pooled, axis=2))
+            if len(cols_pooled) > 1
+            else cols_pooled[0]
+        )
+        rows_pooled.append(row_cat)
+    full_out = (
+        as_tensor_obj(_ops.concatenate(rows_pooled, axis=1))
+        if len(rows_pooled) > 1
+        else rows_pooled[0]
     )
+    return (
+        _wrap_single(full_out),
+        Tensor(row_seq, dtype="int64"),
+        Tensor(col_seq, dtype="int64"),
+    )
+
+
+def _pava_1d(vals: list[float], decreasing: bool) -> builtins.tuple[list[float], list[int]]:
+    """Run Pool Adjacent Violators Algorithm (PAVA) on a 1-D sequence of floats.
+
+    Args:
+        vals: 1-D list of input floats.
+        decreasing: If `True`, enforce non-increasing (`y[i] >= y[i+1]`); else non-decreasing.
+
+    Returns:
+        tuple[list[float], list[int]]: `(fitted_values, segment_ids)`.
+    """
+    # Each block is [sum_val, count]
+    blocks: list[list[float]] = []
+    for v in vals:
+        blocks.append([v, 1.0])
+        while len(blocks) >= 2:
+            prev_mean = blocks[-2][0] / blocks[-2][1]
+            curr_mean = blocks[-1][0] / blocks[-1][1]
+            violation = (prev_mean < curr_mean) if decreasing else (prev_mean > curr_mean)
+            if not violation:
+                break
+            last = blocks.pop()
+            blocks[-1][0] += last[0]
+            blocks[-1][1] += last[1]
+    out_vals: list[float] = []
+    out_segs: list[int] = []
+    for seg_id, (b_sum, b_cnt) in enumerate(blocks):
+        cnt_int = int(b_cnt)
+        mean_v = b_sum / b_cnt
+        out_vals.extend([mean_v] * cnt_int)
+        out_segs.extend([seg_id] * cnt_int)
+    return (out_vals, out_segs)
 
 
 def isotonic_regression(
@@ -2491,7 +2985,7 @@ def isotonic_regression(
     decreasing: bool = True,
     axis: int = -1,
 ) -> builtins.tuple[Tensor, Tensor]:
-    """Solve isotonic regression problems along the given axis.
+    """Solve isotonic regression problems along the given axis via PAVA.
 
     Args:
         inputs: Input `Tensor`.
@@ -2501,9 +2995,31 @@ def isotonic_regression(
     Returns:
         tuple[Tensor, Tensor]: `(output, segments)`.
     """
-    del decreasing, axis
-    t_in = Tensor(0.0 if inputs is None else inputs)
-    return (t_in, Tensor(0, dtype="int32"))
+    del axis
+    if inputs is None:
+        return (Tensor(0.0), Tensor(0, dtype="int32"))
+    t_in = Tensor(inputs)
+    if not t_in.shape or _tracer.is_tracing:
+        return (t_in, Tensor(0, dtype="int32"))
+    raw = t_in.tolist()
+    if len(t_in.shape) == 1 and isinstance(raw, builtins.list):
+        v_1d = [float(x) if isinstance(x, (int, float)) else 0.0 for x in raw]
+        fit_1d, seg_1d = _pava_1d(v_1d, decreasing)
+        return (Tensor(fit_1d, dtype=t_in.dtype), Tensor(seg_1d, dtype=DType.Int32))
+    if len(t_in.shape) == 2 and isinstance(raw, builtins.list):
+        fit_rows: list[list[float]] = []
+        seg_rows: list[list[int]] = []
+        for row in raw:
+            r_vals = (
+                [float(x) if isinstance(x, (int, float)) else 0.0 for x in row]
+                if isinstance(row, builtins.list)
+                else [0.0]
+            )
+            f_r, s_r = _pava_1d(r_vals, decreasing)
+            fit_rows.append(f_r)
+            seg_rows.append(s_r)
+        return (Tensor(fit_rows, dtype=t_in.dtype), Tensor(seg_rows, dtype=DType.Int32))
+    return (t_in, _wrap_single(_ops.zeros(t_in.shape, dtype=msc_core.DType.Int32)))
 
 
 def l2_loss(
@@ -2554,11 +3070,11 @@ def max_pool_with_argmax(
     strides: int | Sequence[int] = 2,
     padding: str = "VALID",
     data_format: str = "NHWC",
-    output_dtype: str = "int64",
+    output_dtype: DTypeLike = "int64",
     include_batch_in_index: bool = False,
     name: str | None = None,
 ) -> builtins.tuple[Tensor, Tensor]:
-    """Perform max pooling on the input and output both max values and indices.
+    """Perform max pooling on the input and output both max values and flattened argmax indices.
 
     Args:
         input: 4-D `Tensor` with shape `[batch, height, width, channels]`.
@@ -2573,16 +3089,66 @@ def max_pool_with_argmax(
     Returns:
         tuple[Tensor, Tensor]: `(output, argmax)`.
     """
-    del output_dtype, include_batch_in_index
-    pooled = max_pool2d(
-        input,
-        ksize=ksize,
-        strides=strides,
-        padding=padding,
-        data_format=data_format,
-        name=name,
-    )
-    return (pooled, _wrap_single(_ops.zeros(pooled.shape, dtype=msc_core.DType.Int64)))
+    del name
+    t_in = Tensor(0.0 if input is None else input)
+    idx_dt = to_dtype(output_dtype)
+    if len(t_in.shape) != 4 or _tracer.is_tracing:
+        pooled_fallback = max_pool2d(
+            t_in, ksize=ksize, strides=strides, padding=padding, data_format=data_format
+        )
+        return (
+            pooled_fallback,
+            _wrap_single(_ops.zeros(pooled_fallback.shape, dtype=idx_dt.as_compiler_dtype)),
+        )
+
+    batch, in_h, in_w, depth = t_in.shape
+    k_h, k_w = _normalize_pool_tuple(ksize, 4)
+    s_h, s_w = _normalize_pool_tuple(strides, 4)
+    if padding.upper() == "SAME":
+        out_h = (in_h + s_h - 1) // s_h
+        out_w = (in_w + s_w - 1) // s_w
+        pad_top = max(0, (out_h - 1) * s_h + k_h - in_h) // 2
+        pad_left = max(0, (out_w - 1) * s_w + k_w - in_w) // 2
+    else:
+        out_h = max(1, (in_h - k_h) // s_h + 1)
+        out_w = max(1, (in_w - k_w) // s_w + 1)
+        pad_top = 0
+        pad_left = 0
+
+    in_list = _extract_4d_floats(t_in)
+    out_vals: list[list[list[list[float]]]] = []
+    out_idxs: list[list[list[list[int]]]] = []
+    for b in range(batch):
+        b_vals: list[list[list[float]]] = []
+        b_idxs: list[list[list[int]]] = []
+        b_offset = b * (in_h * in_w * depth) if include_batch_in_index else 0
+        for oh in range(out_h):
+            r_vals: list[list[float]] = []
+            r_idxs: list[list[int]] = []
+            for ow in range(out_w):
+                c_vals: list[float] = []
+                c_idxs: list[int] = []
+                for d in range(depth):
+                    best_v = float("-inf")
+                    best_idx = 0
+                    for fh in range(k_h):
+                        ih = oh * s_h + fh - pad_top
+                        for fw in range(k_w):
+                            iw = ow * s_w + fw - pad_left
+                            if 0 <= ih < in_h and 0 <= iw < in_w:
+                                v_cand = in_list[b][ih][iw][d]
+                                if v_cand > best_v:
+                                    best_v = v_cand
+                                    best_idx = b_offset + (ih * in_w + iw) * depth + d
+                    c_vals.append(0.0 if best_v == float("-inf") else best_v)
+                    c_idxs.append(best_idx)
+                r_vals.append(c_vals)
+                r_idxs.append(c_idxs)
+            b_vals.append(r_vals)
+            b_idxs.append(r_idxs)
+        out_vals.append(b_vals)
+        out_idxs.append(b_idxs)
+    return (Tensor(out_vals, dtype=t_in.dtype), Tensor(out_idxs, dtype=idx_dt))
 
 
 def pool(
@@ -2722,7 +3288,9 @@ def with_space_to_batch(
     input: Tensor | TensorOperand = None,
     dilation_rate: int | Sequence[int] = 1,
     padding: str = "VALID",
-    op: TensorOperand = None,
+    op: Callable[[Tensor, int, str], TensorOperand]
+    | CallableOperandProtocol
+    | TensorOperand = None,
     filter_shape: Sequence[int] | None = None,
     spatial_dims: Sequence[int] | None = None,
     data_format: str | None = None,
@@ -2731,7 +3299,7 @@ def with_space_to_batch(
 
     Args:
         input: `Tensor` of rank > max(spatial_dims).
-        dilation_rate: `int32` Tensor of*known* shape `[num_spatial_dims]`.
+        dilation_rate: `int32` Tensor of *known* shape `[num_spatial_dims]`.
         padding: `str` constant equal to `'VALID'` or `'SAME'`.
         op: Function that maps `(input, num_spatial_dims, padding) -> output`.
         filter_shape: If `padding == 'SAME'`, specifies the shape of the convolution kernel.
@@ -2741,5 +3309,27 @@ def with_space_to_batch(
     Returns:
         Tensor: Output tensor produced by `op`.
     """
-    del dilation_rate, padding, op, filter_shape, spatial_dims, data_format
-    return Tensor(0.0 if input is None else input)
+    del padding, filter_shape, spatial_dims, data_format
+    if input is None:
+        return Tensor(0.0)
+    t_in = Tensor(input)
+    if not callable(op) or len(t_in.shape) < 3:
+        return t_in
+    num_sp = len(t_in.shape) - 2
+    block_shape = (
+        [int(dilation_rate)] * num_sp
+        if isinstance(dilation_rate, int)
+        else [int(d) for d in dilation_rate]
+    )
+    sp_shape = list(t_in.shape[1 : 1 + len(block_shape)])
+    pad_pair = required_space_to_batch_paddings(
+        sp_shape,
+        block_shape,
+    )
+    assert pad_pair is not None
+    paddings, crops = pad_pair
+    s2b = space_to_batch(t_in, paddings, int(block_shape[0]))
+    s2b_t = s2b if isinstance(s2b, Tensor) else t_in
+    op_out = Tensor(op(s2b_t, len(block_shape), "VALID"))
+    b2s = batch_to_space(op_out, block_shape, crops)
+    return b2s if b2s is not None else op_out

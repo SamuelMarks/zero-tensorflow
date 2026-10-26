@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import zero_tensorflow as tf
+from zero_tensorflow.array_ops import _to_float, _to_int, _to_py_data
 from zero_tensorflow.core_stubs import (
-    _to_float,
-    _to_int,
-    _to_py_data,
     double,
     import_graph_def,
     init_scope,
@@ -186,6 +184,9 @@ def test_core_stubs() -> None:
         pt = ProxyTensor(id="x_in", shape=(1, 2, 2, 1), dtype="float32")
         traced_res = space_to_batch_nd(tf._to_tensor(pt), [2, 2], None)
         assert isinstance(traced_res, tf.Tensor)
+        traced_sz = size(tensor, out_type=tf.int64, name="my_size")
+        assert traced_sz.numpy() == 2
+        assert any(n.op_type == "Size" for n in _tracer.active_graph.nodes.values())
     finally:
         _compiler_config.eager_mode = prev_eager
         _tracer.is_tracing = prev_tracing
@@ -195,5 +196,5 @@ def test_core_stubs() -> None:
     assert _to_py_data(None) is None
     assert _to_float("not_a_float") == 0.0
     assert _to_int("not_an_int") == 0
-    assert string(tensor) is not None
-    assert string() is None
+    assert string == tf.dtypes.string
+    assert tf.string == tf.dtypes.string

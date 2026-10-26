@@ -6,6 +6,7 @@ import math
 
 import zero_tensorflow as tf
 from zero_tensorflow import Tensor, debugging
+from zero_tensorflow.raw_ops import _extract_arg
 
 import pytest
 
@@ -67,6 +68,22 @@ def test_bitwise_coverage() -> None:
     debugging.assert_equal(
         tf.bitwise.right_shift(Tensor([8, 4], dtype=tf.int32), Tensor([2, 1], dtype=tf.int32)),
         [2, 2],
+    )
+    debugging.assert_equal(tf.bitwise.invert(Tensor([0, 1, -1], dtype=tf.int8)), [-1, -2, 0])
+    debugging.assert_equal(tf.bitwise.invert(Tensor([0, 1, 255], dtype=tf.uint8)), [255, 254, 0])
+    debugging.assert_equal(tf.bitwise.invert(Tensor([0, 1, -1], dtype=tf.int16)), [-1, -2, 0])
+    debugging.assert_equal(
+        tf.bitwise.invert(Tensor([0, 1, 65535], dtype=tf.uint16)), [65535, 65534, 0]
+    )
+    debugging.assert_equal(tf.bitwise.invert(Tensor([0, 1, -1], dtype=tf.int32)), [-1, -2, 0])
+    debugging.assert_equal(
+        tf.bitwise.invert(Tensor([0, 1, 4294967295], dtype=tf.uint32)),
+        [4294967295, 4294967294, 0],
+    )
+    debugging.assert_equal(tf.bitwise.invert(Tensor([0, 1, -1], dtype=tf.int64)), [-1, -2, 0])
+    debugging.assert_equal(
+        tf.bitwise.invert(Tensor([0, 1, 18446744073709551615], dtype=tf.uint64)),
+        [18446744073709551615, 18446744073709551614, 0],
     )
 
 
@@ -334,9 +351,7 @@ def test_raw_ops_routing() -> None:
     assert isinstance(tf.unstack(Tensor([[1.0, 2.0], [3.0, 4.0]])), (Tensor, list, tuple))
 
     # Exercise newly added v0.0.5 raw_ops endpoints and _extract_arg kwargs fallback
-    import sys
-
-    assert sys.modules["zero_tensorflow.raw_ops"]._extract_arg((), {"x": 42}, 0, "x") == 42
+    assert _extract_arg((), {"x": 42}, 0, "x") == 42
     assert tf.raw_ops.CheckPinned() is None
     assert tf.raw_ops.ConvertToListOfSparseCoreCooTensors() is None
     assert tf.raw_ops.ConvertToSparseCoreCsrWrappedCooTensor() is None

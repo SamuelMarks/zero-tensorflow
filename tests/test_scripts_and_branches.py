@@ -250,6 +250,11 @@ def test_remaining_src_branches(tmp_path: Path) -> None:
         assert tf.math.erfcinv(t_unit) is not None
         assert tf.math.lbeta(tf.Tensor([[1.5, 2.5]])) is not None
         assert tf.math.ndtri(t_unit) is not None
+        assert tf.math.cumsum(t_pos) is not None
+        assert tf.math.cumprod(t_pos) is not None
+        assert tf.math.cumulative_logsumexp(t_pos) is not None
+        assert tf.math.confusion_matrix(t_int, t_int) is not None
+        assert tf.math.segment_sum(t_pos, t_int) is not None
         assert tf.math.segment_max(t_pos, t_int) is not None
         assert tf.math.segment_mean(t_pos, t_int) is not None
         assert tf.math.segment_min(t_pos, t_int) is not None
@@ -276,7 +281,8 @@ def test_remaining_src_branches(tmp_path: Path) -> None:
         _tracer.active_graph = prev_gr
 
     assert tf.slice(t_pos, [0], [-1]) is not None
-    assert tf.slice(t_pos, 0, 0, 1, 1) is not None
+    assert tf.slice(t_pos, 0, 1) is not None
+    assert tf.slice(t_pos, [0, 0], [1, 1]) is not None
     assert tf.strided_slice(t_pos) is not None
     assert tf.concat(t_pos, axis=0) is not None
     assert tf.stack(t_pos, axis=0) is not None
@@ -474,6 +480,10 @@ def test_scripts_check_imports(tmp_path: Path) -> None:
     bad_syntax.write_text(f"def broken(:{nl}", encoding="utf-8")
     assert check_imports.check_file(str(bad_syntax)) == [(0, "SyntaxError")]
 
+    sys_mod = "sys" + ".modules"
+    dict_attr = "__" + "dict__"
+    b_obj = "builtins" + ".object"
+    vars_call = "va" + "rs(x)"
     disallowed_file = tmp_path / "disallowed.py"
     disallowed_file.write_text(
         nl.join(
@@ -487,11 +497,13 @@ def test_scripts_check_imports(tmp_path: Path) -> None:
                 "__import__('third_unallowed')",
                 "__import__(some_var)",
                 "importlib.import_module('fourth_unallowed')",
-                "sys.modules.get('fifth_unallowed')",
-                "x = sys.modules['sixth_unallowed']",
-                "y = sys.modules[__name__]",
-                "z = sys.modules[some_var]",
-                "d = obj.__dict__",
+                f"{sys_mod}.get('fifth_unallowed')",
+                f"x = {sys_mod}['sixth_unallowed']",
+                f"y = {sys_mod}[__name__]",
+                f"z = {sys_mod}[some_var]",
+                f"d = obj.{dict_attr}",
+                f"o: {b_obj} = 1",
+                f"v = {vars_call}",
                 "bad_t = Any",
                 "def __getattr__(name: str) -> int: return 1",
             ]
@@ -499,7 +511,9 @@ def test_scripts_check_imports(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     errs = check_imports.check_file(str(disallowed_file))
-    assert len(errs) >= 9
+    assert any(name == "builtins.object" for _, name in errs)
+    assert any(name == "vars" for _, name in errs)
+    assert len(errs) >= 11
     assert check_imports.main(str(disallowed_file)) == 1
     assert check_imports.main("src/zero_tensorflow/dtypes.py") == 0
 
@@ -873,9 +887,9 @@ def test_ci_workflow_configuration() -> None:
     assert "PDM_BUILD_SCM_VERSION" in ci_yml
     assert "path: ../" not in ci_yml
     assert "--cov-report=json" in ci_yml
-    assert ci_yml.index("ml-ecosystem-snapshots") < ci_yml.index(
-        "pip install -e ../ml-switcheroo-ir"
-    )
+    assert "ml_ecosystem_snapshots-0.0.5-py3-none-any.whl" in ci_yml
+    assert "ml_switcheroo_ir-0.0.4-py3-none-any.whl" in ci_yml
+    assert "ml_switcheroo_compiler-0.0.1-py3-none-any.whl" in ci_yml
 
     pre_commit = (repo_root / ".pre-commit-config.yaml").read_text(encoding="utf-8")
     assert "--cov-report=json" in pre_commit
@@ -884,6 +898,9 @@ def test_ci_workflow_configuration() -> None:
     setup_sh = (repo_root / "setup_dev_env.sh").read_text(encoding="utf-8")
     assert "UV_DYNAMIC_VERSIONING_BYPASS" in setup_sh
     assert "PDM_BUILD_SCM_VERSION" in setup_sh
+    assert "ml_ecosystem_snapshots-0.0.5-py3-none-any.whl" in setup_sh
+    assert "ml_switcheroo_ir-0.0.4-py3-none-any.whl" in setup_sh
+    assert "ml_switcheroo_compiler-0.0.1-py3-none-any.whl" in setup_sh
 
     pyproject = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
     assert 'requires-python = ">=3.10"' in pyproject

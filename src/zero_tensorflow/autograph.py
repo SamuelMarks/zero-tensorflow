@@ -13,7 +13,7 @@ from zero_tensorflow._typing import TensorOperand
 
 from ml_switcheroo_compiler.backends.ast_to_ir import parse_ast_to_ir
 from ml_switcheroo_compiler.ir.core import IRGraph
-from ml_switcheroo_compiler.tracing.autograph import do_not_convert, set_loop_options
+from ml_switcheroo_compiler.tracing.autograph import set_loop_options
 from typing_extensions import ParamSpec
 
 _P = ParamSpec("_P")
@@ -30,6 +30,8 @@ __all__ = [
 
 _VERBOSITY_LEVEL: int = 0
 _ALSOLOGTOSTDERR: bool = False
+_TRACE_LOG: list[tuple[TensorOperand, ...]] = []
+_DO_NOT_CONVERT_IDS: set[int] = set()
 
 
 class _FeatureEnum(enum.Enum):
@@ -42,6 +44,117 @@ class _FeatureEnum(enum.Enum):
     EQUALITY_OPERATORS = "EQUALITY_OPERATORS"
     LISTS = "LISTS"
     NAME_SCOPES = "NAME_SCOPES"
+
+
+class _AutoGraphNodeTransformer(ast.NodeTransformer):
+    """AST transformer rewriting Python `if`/`else` and `while` into `tf.cond` and `tf.while_loop`."""
+
+    def visit_If(self, node: ast.If) -> ast.AST:
+        """Transform `if cond: return a else: return b` or simple assignments into `tf.cond`.
+
+        Args:
+            node: Input `ast.If` statement node.
+
+        Returns:
+            ast.AST: Rewritten AST node using `tf.cond` or visited `ast.If`.
+        """
+        self.generic_visit(node)
+        if (
+            len(node.body) == 1
+            and len(node.orelse) == 1
+            and isinstance(node.body[0], ast.Return)
+            and isinstance(node.orelse[0], ast.Return)
+            and node.body[0].value is not None
+            and node.orelse[0].value is not None
+        ):
+            true_lambda = ast.Lambda(
+                args=ast.arguments(
+                    posonlyargs=[],
+                    args=[],
+                    kwonlyargs=[],
+                    kw_defaults=[],
+                    defaults=[],
+                ),
+                body=node.body[0].value,
+            )
+            false_lambda = ast.Lambda(
+                args=ast.arguments(
+                    posonlyargs=[],
+                    args=[],
+                    kwonlyargs=[],
+                    kw_defaults=[],
+                    defaults=[],
+                ),
+                body=node.orelse[0].value,
+            )
+            cond_call = ast.Call(
+                func=ast.Attribute(
+                    value=ast.Name(id="tf", ctx=ast.Load()),
+                    attr="cond",
+                    ctx=ast.Load(),
+                ),
+                args=[node.test, true_lambda, false_lambda],
+                keywords=[],
+            )
+            return ast.copy_location(ast.Return(value=cond_call), node)
+        return node
+
+    def visit_While(self, node: ast.While) -> ast.AST:
+        """Transform single-variable `while cond: x = expr` into `x = tf.while_loop(...)`.
+
+        Args:
+            node: Input `ast.While` statement node.
+
+        Returns:
+            ast.AST: Rewritten AST node using `tf.while_loop` or visited `ast.While`.
+        """
+        self.generic_visit(node)
+        if (
+            len(node.body) == 1
+            and isinstance(node.body[0], ast.Assign)
+            and len(node.body[0].targets) == 1
+            and isinstance(node.body[0].targets[0], ast.Name)
+        ):
+            var_name = node.body[0].targets[0].id
+            cond_lambda = ast.Lambda(
+                args=ast.arguments(
+                    posonlyargs=[],
+                    args=[ast.arg(arg=var_name)],
+                    kwonlyargs=[],
+                    kw_defaults=[],
+                    defaults=[],
+                ),
+                body=node.test,
+            )
+            body_lambda = ast.Lambda(
+                args=ast.arguments(
+                    posonlyargs=[],
+                    args=[ast.arg(arg=var_name)],
+                    kwonlyargs=[],
+                    kw_defaults=[],
+                    defaults=[],
+                ),
+                body=ast.Tuple(elts=[node.body[0].value], ctx=ast.Load()),
+            )
+            loop_call = ast.Call(
+                func=ast.Attribute(
+                    value=ast.Name(id="tf", ctx=ast.Load()),
+                    attr="while_loop",
+                    ctx=ast.Load(),
+                ),
+                args=[
+                    cond_lambda,
+                    body_lambda,
+                    ast.List(elts=[ast.Name(id=var_name, ctx=ast.Load())], ctx=ast.Load()),
+                ],
+                keywords=[],
+            )
+            assign_stmt = ast.Assign(
+                targets=[ast.Tuple(elts=[ast.Name(id=var_name, ctx=ast.Store())], ctx=ast.Store())],
+                value=loop_call,
+            )
+            return ast.copy_location(assign_stmt, node)
+        return node
 
 
 class experimental:
@@ -61,7 +174,23 @@ class experimental:
         Returns:
             F | Callable[[F], F]: Decorated function or decorator callable.
         """
-        return do_not_convert(func)
+        if func is not None:
+            _DO_NOT_CONVERT_IDS.add(id(func))
+            return func
+
+        def _decorator(f: F) -> F:
+            """Register `f` in `_DO_NOT_CONVERT_IDS` and return `f`.
+
+            Args:
+                f: Function to exclude from AutoGraph conversion.
+
+            Returns:
+                F: Unmodified function `f`.
+            """
+            _DO_NOT_CONVERT_IDS.add(id(f))
+            return f
+
+        return _decorator
 
     @staticmethod
     def set_loop_options(
@@ -154,6 +283,8 @@ def to_code(
     except (OSError, TypeError):
         return ""
     parsed_ast = ast.parse(raw_source)
+    if id(entity) not in _DO_NOT_CONVERT_IDS:
+        parsed_ast = ast.fix_missing_locations(_AutoGraphNodeTransformer().visit(parsed_ast))
     _ = parse_ast_to_ir(raw_source)
     return ast.unparse(parsed_ast)
 
@@ -175,6 +306,12 @@ def to_graph(
     """
     if entity is None or not callable(entity):
         return None
+    if id(entity) in _DO_NOT_CONVERT_IDS:
+        try:
+            raw_src = textwrap.dedent(inspect.getsource(entity))
+        except (OSError, TypeError):
+            raw_src = ""
+        return _ConvertedEntity(entity, IRGraph(), raw_src)
     code = to_code(
         entity,
         recursive=recursive,
@@ -190,5 +327,6 @@ def trace(*args: TensorOperand) -> None:
     Args:
         *args: Arguments to trace.
     """
-    del args
+    if _VERBOSITY_LEVEL > 0:
+        _TRACE_LOG.append(args)
     return None

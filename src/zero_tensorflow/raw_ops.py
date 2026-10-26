@@ -7312,20 +7312,24 @@ class raw_ops:
         Returns:
             Tensor | Sequence[Tensor | TensorOperand] | TensorOperand: Operation result.
         """
-        del (
-            input,
-            filter,
-            strides,
-            padding,
-            use_cudnn_on_gpu,
-            explicit_paddings,
-            data_format,
-            dilations,
-            name,
-            args,
-            kwargs,
+        del use_cudnn_on_gpu, explicit_paddings, name, args, kwargs
+        if input is None or filter is None:
+            return None
+        s_val: int | list[int] = (
+            [int(x) for x in strides if isinstance(x, (int, float))]
+            if isinstance(strides, Sequence) and not isinstance(strides, (str, bytes))
+            else (int(strides) if isinstance(strides, int) else 1)
         )
-        return None
+        p_val = str(padding) if isinstance(padding, str) else "VALID"
+        df_val = str(data_format) if isinstance(data_format, str) else "NHWC"
+        d_val: int | list[int] | None = (
+            [int(x) for x in dilations if isinstance(x, (int, float))]
+            if isinstance(dilations, Sequence) and not isinstance(dilations, (str, bytes))
+            else (int(dilations) if isinstance(dilations, int) else None)
+        )
+        return _nn.conv2d(
+            input, filter, strides=s_val, padding=p_val, data_format=df_val, dilations=d_val
+        )
 
     @staticmethod
     def Conv2DBackpropFilter(

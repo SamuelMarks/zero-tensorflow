@@ -585,8 +585,6 @@ def _is_int_dtype(out_type: DTypeLike) -> bool:
     """
     if out_type is int:
         return True
-    if isinstance(out_type, msc_dtype.DType):
-        return "int" in out_type.value.lower()
     if isinstance(out_type, str):
         return "int" in out_type.lower()
     return False

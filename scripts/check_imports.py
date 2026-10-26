@@ -220,6 +220,19 @@ def check_file(filepath: str) -> list[tuple[int, str]]:
                 verify_module(node.lineno, None)
         elif isinstance(node, ast.Attribute) and node.attr == "__dict__":
             disallowed.append((node.lineno, "__dict__"))
+        elif (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "builtins"
+            and node.attr == "object"
+        ):
+            disallowed.append((node.lineno, "builtins.object"))
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in ("vars", "dir", "eval", "exec")
+        ):
+            disallowed.append((node.lineno, node.func.id))
         elif isinstance(node, ast.Name) and node.id in (
             "Any",
             "object",

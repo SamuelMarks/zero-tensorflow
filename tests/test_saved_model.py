@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import zero_tensorflow.saved_model as sm_mod
-from zero_tensorflow import Variable
+from zero_tensorflow import Tensor, Variable
 from zero_tensorflow._typing import TensorOperand
 from zero_tensorflow.saved_model import (
     Asset,
@@ -84,6 +84,10 @@ def test_saved_model(tmp_path: Path) -> None:
     sm_mod._FINGERPRINT_STORE.pop(export_dir, None)
     assert contains_saved_model(export_dir) is True
     loaded_from_disk = load(export_dir)
-    assert loaded_from_disk is not None
+    assert loaded_from_disk is not None and callable(loaded_from_disk)
+    out0 = loaded_from_disk()
+    assert isinstance(out0, Tensor) and out0.shape == (3,)
+    out1 = loaded_from_disk(7.0)
+    assert isinstance(out1, Tensor) and out1.numpy() == 7.0
     fp = experimental.read_fingerprint(export_dir)
     assert fp is not None and fp.saved_model_checksum > 0

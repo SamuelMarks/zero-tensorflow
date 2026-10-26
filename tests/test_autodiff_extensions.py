@@ -5,6 +5,8 @@ from __future__ import annotations
 from zero_tensorflow import (
     GradientTape,
     Tensor,
+    TensorSpec,
+    UnconnectedGradients,
     Variable,
     custom_gradient,
     debugging,
@@ -12,7 +14,11 @@ from zero_tensorflow import (
     hessians,
     stop_gradient,
 )
-from zero_tensorflow._typing import CallableOperandProtocol, TensorOperand
+from zero_tensorflow._typing import (
+    CallableOperandProtocol,
+    GradFnProtocol,
+    TensorOperand,
+)
 from zero_tensorflow.dtypes import DType, float32
 
 import pytest
@@ -297,4 +303,100 @@ def test_tf_function_signatures_and_caching() -> None:
     with pytest.raises(ValueError, match="Expected 1 arguments"):
         scaled(Tensor([1.0, 2.0]), Tensor([3.0, 4.0]))
     with pytest.raises(ValueError, match="Incompatible argument shape"):
-        scaled(Tensor([1.0, 2.0, 3.0]))
+        scaled(Tensor([1.0, 2.0, 3.0], dtype=float32))
+    with pytest.raises(TypeError, match="Incompatible argument dtype"):
+        scaled(Tensor([1.0, 2.0], dtype=DType.Float64))
+    scaled._validate_input_signature([5])
+
+    assert len(cf1.inputs) == 1
+    first_spec = cf1.structured_input_signature[0][0]
+    assert isinstance(first_spec, TensorSpec) and first_spec.shape == (2,)
+    assert cf1.outputs[0].shape == (2,)
+    assert cf1.structured_outputs is not None
+
+    cf_kw = scaled.get_concrete_function(Tensor([1.0, 2.0], dtype=float32), k=spec, m=5)
+    assert "k" in cf_kw.structured_input_signature[1]
+    assert "m" in cf_kw.structured_input_signature[1]
+
+    @function(reduce_retracing=True)  # type: ignore[arg-type]
+    def pair_fn(a: Tensor) -> tuple[Tensor, Tensor]:
+        """Return `(a, a * 2.0)` tuple.
+
+        Args:
+            a: Input tensor.
+
+        Returns:
+            tuple[Tensor, Tensor]: Pair of tensors.
+        """
+        return (a, a * 2.0)
+
+    p_out: tuple[Tensor, Tensor] = pair_fn(Tensor([1.0, 2.0]))
+    assert len(p_out) == 2
+
+    # Verify dict/tuple sources and UnconnectedGradients enum on GradientTape.gradient
+    vx = Variable(3.0)
+    vy_unconn = Variable(4.0)
+    with GradientTape(persistent=True) as dtape:
+        dtape.watch(vx)
+        dtape.watch(vy_unconn)
+        dz = vx * vx
+    dict_grads = dtape.gradient(
+        dz,
+        {"x": vx, "u": vy_unconn},
+        unconnected_gradients=UnconnectedGradients.ZERO,
+    )
+    assert isinstance(dict_grads, dict)
+    assert dict_grads["x"] is not None and dict_grads["x"].numpy() == 6.0
+    assert dict_grads["u"] is not None and dict_grads["u"].numpy() == 0.0
+    tup_grads = dtape.gradient(dz, (vx, vy_unconn))
+    assert isinstance(tup_grads, tuple) and tup_grads[0] is not None and tup_grads[0].numpy() == 6.0
+    jac_tup = dtape.jacobian(dz, (vx,))
+    assert isinstance(jac_tup, list) and jac_tup[0] is not None
+    jac_map = dtape.jacobian(dz, {"x": vx})
+    assert isinstance(jac_map, list) and jac_map[0] is not None
+
+    # Verify custom_gradient with variables= keyword argument
+    shared_w = Variable(2.0)
+
+    @custom_gradient
+    def fn_with_vars(x_in: Tensor) -> tuple[Tensor, GradFnProtocol]:
+        """Multiply `x_in` by `shared_w` with explicit variable gradient callback.
+
+        Args:
+            x_in: Input tensor.
+
+        Returns:
+            tuple[Tensor, GradFnProtocol]: Forward output and gradient callback.
+        """
+        y_out = x_in * shared_w
+
+        def _grad(
+            *args: TensorOperand,
+            **kwargs: TensorOperand,
+        ) -> TensorOperand:
+            """Compute gradients for `[x_in]` and `variables`.
+
+            Args:
+                *args: Upstream gradient.
+                **kwargs: Keyword arguments including `variables`.
+
+            Returns:
+                TensorOperand: Input grads and variable grads.
+            """
+            variables = kwargs.get("variables")
+            del variables
+            dy_t = Tensor(args[0] if args else 1.0)
+            return ([dy_t * 5.0], [dy_t * 7.0])
+
+        return y_out, _grad
+
+    x_arg = Variable(3.0)
+    with GradientTape(persistent=True) as vtape:
+        vtape.watch(x_arg)
+        vtape.watch(shared_w)
+        v_out = fn_with_vars(x_arg)
+    v_grads = vtape.gradient(v_out, [x_arg, shared_w])
+    assert isinstance(v_grads, list) and len(v_grads) == 2
+    gx, gw = v_grads[0], v_grads[1]
+    assert isinstance(gx, Tensor) and gx.numpy() == 5.0
+    assert isinstance(gw, Tensor) and gw.numpy() == 7.0

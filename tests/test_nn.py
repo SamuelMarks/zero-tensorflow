@@ -6,6 +6,7 @@ import math
 
 import zero_tensorflow as tf
 from zero_tensorflow import Tensor, debugging, function, nn
+from zero_tensorflow._typing import TensorOperand
 
 import pytest
 
@@ -120,6 +121,14 @@ def test_nn_conv_pool_norm_and_losses() -> None:
     x1d = tf.ones((1, 2, 4), dtype=tf.float32)
     k1d = tf.ones((3, 2, 2), dtype=tf.float32)
     assert isinstance(nn.conv1d(x1d, k1d), Tensor)
+    x1d_ncw = tf.ones((1, 2, 4), dtype=tf.float32)
+    assert nn.conv1d(
+        x1d_ncw, k1d, stride=[1, 1, 1], dilations=[1, 1, 1], data_format="NCW"
+    ).shape == (
+        1,
+        2,
+        2,
+    )
 
     x2d = tf.ones((1, 2, 2, 2), dtype=tf.float32)
     k2d = tf.ones((2, 2, 2, 2), dtype=tf.float32)
@@ -136,15 +145,36 @@ def test_nn_conv_pool_norm_and_losses() -> None:
     x2d_hwc = tf.ones((1, 4, 4, 2), dtype=tf.float32)
     dw_k = tf.ones((2, 2, 2, 1), dtype=tf.float32)
     assert isinstance(nn.depthwise_conv2d(x2d_hwc, dw_k), Tensor)
+    assert isinstance(
+        nn.depthwise_conv2d(x2d_hwc, dw_k, strides=(1, 1), dilations=(1, 1)),
+        Tensor,
+    )
+    assert isinstance(
+        nn.depthwise_conv2d(x2d_hwc, dw_k, strides=1, dilations=1),
+        Tensor,
+    )
+    x2d_nchw = tf.ones((1, 2, 4, 4), dtype=tf.float32)
+    assert nn.depthwise_conv2d(x2d_nchw, dw_k, data_format="NCHW").shape == (1, 2, 3, 3)
     pt_k = tf.ones((1, 1, 2, 3), dtype=tf.float32)
     assert isinstance(nn.separable_conv2d(x2d_hwc, dw_k, pt_k), Tensor)
+    assert isinstance(
+        nn.separable_conv2d(x2d_hwc, dw_k, pt_k, strides=(1, 1), dilations=(1, 1)),
+        Tensor,
+    )
+    assert isinstance(
+        nn.separable_conv2d(x2d_hwc, dw_k, pt_k, strides=1, dilations=1),
+        Tensor,
+    )
+    assert nn.separable_conv2d(x2d_nchw, dw_k, pt_k, data_format="NCHW").shape == (1, 3, 3, 3)
 
     crelu_out = nn.crelu(Tensor([-1.0, 2.0]))
     debugging.assert_near(crelu_out, [0.0, 2.0, 1.0, 0.0])
 
     assert isinstance(nn.gelu(Tensor([0.0, 1.0])), Tensor)
     assert isinstance(nn.silu(Tensor([0.0, 1.0])), Tensor)
+    debugging.assert_near(nn.silu(Tensor([0.0]), beta=2.0), [0.0])
     assert isinstance(nn.swish(Tensor([0.0, 1.0])), Tensor)
+    debugging.assert_near(nn.swish(Tensor([0.0]), beta=2.0), [0.0])
 
     bn_out = nn.batch_norm_with_global_normalization(
         Tensor([2.0, 4.0]),
@@ -403,9 +433,33 @@ def test_linalg_extended_ops() -> None:
         """
         lu_t, _ = tf.linalg.lu(x)
         fmp_t, _, _ = nn.fractional_max_pool(x)
+        _ = tf.linalg.diag(Tensor([1.0, 2.0]))
+        _ = tf.linalg.diag(Tensor([1.0, 2.0]), k=1)
+        _ = tf.linalg.lstsq(x, x)
+        _ = tf.linalg.set_diag(x, Tensor([1.0, 2.0]))
         return lu_t, fmp_t
 
     traced_linalg_nn(mat)
+
+    from zero_tensorflow import linalg_ops
+
+    assert linalg_ops._to_nested_floats(Tensor(2.5)) == [[2.5]]
+    assert linalg_ops._to_nested_floats(Tensor([2.5, 3.5])) == [[2.5], [3.5]]
+    assert linalg_ops._to_1d_floats(Tensor(2.5)) == [2.5]
+    assert tf.linalg.einsum("ij,jk->ik", mat, mat, optimize=True).shape == (2, 2)
+    assert tf.linalg.norm(vec, ord=1, axis=[0]).shape == ()
+    assert tf.linalg.norm(vec, ord="inf").shape == ()
+    assert tf.linalg.norm(vec, ord="-inf").shape == ()
+    assert tf.linalg.norm(vec, ord=3).shape == ()
+    assert tf.linalg.pinv(mat).shape == (2, 2)
+    assert len(tf.linalg.slogdet(mat)) == 2
+    assert tf.linalg.diag_part(mat, k=(-1, 1)).shape == (3, 2)
+    assert tf.linalg.set_diag(
+        mat, Tensor([[1.0, 0.0], [9.0, 8.0], [2.0, 0.0]]), k=(-1, 1)
+    ).shape == (
+        2,
+        2,
+    )
 
     assert mat.data is not None
     assert Tensor(None).data is None
@@ -415,9 +469,12 @@ def test_linalg_extended_ops() -> None:
     )
     from zero_tensorflow import math_ops
 
-    assert math_ops._clean_kwargs(
-        {"dim": (0, "skip"), "empty": ("skip",), "dtype": tf.float32, "other": Tensor(1.0)}
-    ) == {"axis": (0,), "dtype": "float32"}
+    assert math_ops._normalize_axis(None) is None
+    assert math_ops._normalize_axis(0) == 0
+    assert math_ops._normalize_axis(Tensor(1, dtype=tf.int32)) == 1
+    assert math_ops._normalize_axis(Tensor([0, 1], dtype=tf.int32)) == (0, 1)
+    assert math_ops._normalize_axis([0, 1]) == (0, 1)
+    assert math_ops._normalize_axis("invalid") is None
 
     # Test new LinearOperator* classes and properties
     assert isinstance(op_full.H, tf.linalg.LinearOperatorFullMatrix)
@@ -426,10 +483,14 @@ def test_linalg_extended_ops() -> None:
 
     assert tf.linalg.LinearOperatorAdjoint(op_full).to_dense().shape == (2, 2)
     assert tf.linalg.LinearOperatorAdjoint(mat).to_dense().shape == (2, 2)
-    assert tf.linalg.LinearOperatorBlockDiag([op_full, mat]).to_dense().shape == (2, 2)
+    assert tf.linalg.LinearOperatorBlockDiag([op_full, mat]).to_dense().shape == (4, 4)
+    assert tf.linalg.LinearOperatorBlockDiag([op_full]).to_dense().shape == (2, 2)
     assert tf.linalg.LinearOperatorBlockDiag(()).to_dense().shape == (1, 1)
-    assert tf.linalg.LinearOperatorBlockLowerTriangular([[op_full]]).to_dense().shape == (1, 1)
+    assert tf.linalg.LinearOperatorBlockLowerTriangular([[op_full]]).to_dense().shape == (2, 2)
+    assert tf.linalg.LinearOperatorBlockLowerTriangular(()).to_dense().shape == (1, 1)
+    assert tf.linalg.LinearOperatorBlockLowerTriangular([[]]).to_dense().shape == (1, 1)
     assert tf.linalg.LinearOperatorCirculant([1.0, 2.0]).to_dense().shape == (2, 2)
+    assert tf.linalg.LinearOperatorCirculant([]).to_dense().shape == (1, 1)
     assert tf.linalg.LinearOperatorCirculant2D([1.0, 2.0]).to_dense().shape == (2, 2)
     assert tf.linalg.LinearOperatorCirculant3D([1.0, 2.0]).to_dense().shape == (2, 2)
     assert tf.linalg.LinearOperatorComposition([op_full, op_full]).to_dense().shape == (2, 2)
@@ -437,9 +498,12 @@ def test_linalg_extended_ops() -> None:
     assert tf.linalg.LinearOperatorHouseholder([1.0, 0.0]).to_dense().shape == (2, 2)
     assert tf.linalg.LinearOperatorHouseholder(1.0).to_dense().shape == (1, 1)
     assert tf.linalg.LinearOperatorInversion(op_full).to_dense().shape == (2, 2)
+    assert tf.linalg.LinearOperatorKronecker([op_full, op_full]).to_dense().shape == (4, 4)
     assert tf.linalg.LinearOperatorKronecker([op_full]).to_dense().shape == (2, 2)
     assert tf.linalg.LinearOperatorKronecker(()).to_dense().shape == (1, 1)
-    assert tf.linalg.LinearOperatorLowRankUpdate(op_full, [[1.0], [0.0]]).to_dense().shape == (
+    assert tf.linalg.LinearOperatorLowRankUpdate(
+        op_full, [[1.0], [0.0]], diag_update=[2.0]
+    ).to_dense().shape == (
         2,
         2,
     )
@@ -449,6 +513,147 @@ def test_linalg_extended_ops() -> None:
     assert tf.linalg.LinearOperatorToeplitz([1.0, 2.0], [1.0, 3.0]).to_dense().shape == (2, 2)
     assert tf.linalg.LinearOperatorTridiag(diags_compact).to_dense().shape == (2, 2)
     assert tf.linalg.LinearOperatorZeros(2, 3).to_dense().shape == (2, 3)
+
+    # Specialized LinearOperator methods verification
+    debugging.assert_near(op_diag.diag_part(), [2.0, 3.0])
+    debugging.assert_near(op_diag.trace(), 5.0)
+    debugging.assert_near(op_diag.determinant(), 6.0)
+    debugging.assert_near(op_diag.log_abs_determinant(), math.log(6.0))
+    debugging.assert_near(op_diag.matmul(rhs), [[10.0], [12.0]])
+    debugging.assert_near(op_diag.solve(Tensor([[10.0], [12.0]])), rhs)
+
+    debugging.assert_near(op_id.diag_part(), [1.0, 1.0])
+    debugging.assert_near(op_id.trace(), 2.0)
+    debugging.assert_near(op_id.determinant(), 1.0)
+    debugging.assert_near(op_id.log_abs_determinant(), 0.0)
+    debugging.assert_near(op_id.matmul(rhs), rhs)
+    debugging.assert_near(op_id.solve(rhs), rhs)
+
+    debugging.assert_near(op_tril.diag_part(), [4.0, 3.0])
+    debugging.assert_near(op_tril.determinant(), 12.0)
+    debugging.assert_near(op_tril.log_abs_determinant(), math.log(12.0))
+    debugging.assert_near(op_tril.solve(op_tril.matmul(rhs)), rhs)
+
+    op_adj = tf.linalg.LinearOperatorAdjoint(op_full)
+    debugging.assert_near(op_adj.matmul(rhs), op_full.matmul(rhs, adjoint=True))
+    debugging.assert_near(op_adj.solve(rhs), op_full.solve(rhs, adjoint=True))
+    op_adj_raw = tf.linalg.LinearOperatorAdjoint(mat)
+    debugging.assert_near(op_adj_raw.matmul(rhs), op_full.matmul(rhs, adjoint=True))
+    debugging.assert_near(op_adj_raw.solve(rhs), op_full.solve(rhs, adjoint=True))
+
+    op_bdiag = tf.linalg.LinearOperatorBlockDiag([op_diag, mat])
+    debugging.assert_near(op_bdiag.determinant(), 6.0 * 11.0)
+    debugging.assert_near(op_bdiag.trace(), 5.0 + 7.0)
+    assert tf.linalg.LinearOperatorBlockDiag(()).determinant().numpy() == 1.0
+    assert tf.linalg.LinearOperatorBlockDiag(()).trace().numpy() == 1.0
+
+    op_circ = tf.linalg.LinearOperatorCirculant([2.0, 4.0])
+    debugging.assert_near(op_circ.determinant(), 8.0)
+    debugging.assert_near(op_circ.trace(), 6.0)
+
+    op_comp = tf.linalg.LinearOperatorComposition([op_diag, mat])
+    debugging.assert_near(op_comp.matmul(rhs), op_diag.matmul(op_full.matmul(rhs)))
+    debugging.assert_near(
+        op_comp.matmul(rhs, adjoint=True),
+        op_full.matmul(op_diag.matmul(rhs, adjoint=True), adjoint=True),
+    )
+    debugging.assert_near(tf.linalg.LinearOperatorComposition(()).matmul(rhs), rhs)
+
+    op_hh = tf.linalg.LinearOperatorHouseholder([1.0, 0.0])
+    debugging.assert_near(op_hh.determinant(), -1.0)
+    debugging.assert_near(op_hh.log_abs_determinant(), 0.0)
+    debugging.assert_near(op_hh.solve(rhs), op_hh.matmul(rhs))
+
+    op_inv = tf.linalg.LinearOperatorInversion(op_full)
+    debugging.assert_near(op_inv.matmul(rhs), op_full.solve(rhs))
+    debugging.assert_near(op_inv.solve(rhs), op_full.matmul(rhs))
+    op_inv_raw = tf.linalg.LinearOperatorInversion(mat)
+    debugging.assert_near(op_inv_raw.matmul(rhs), op_full.solve(rhs))
+    debugging.assert_near(op_inv_raw.solve(rhs), op_full.matmul(rhs))
+
+    op_kron = tf.linalg.LinearOperatorKronecker([op_diag, mat])
+    debugging.assert_near(op_kron.trace(), 5.0 * 7.0)
+    assert tf.linalg.LinearOperatorKronecker(()).trace().numpy() == 1.0
+
+    op_lru = tf.linalg.LinearOperatorLowRankUpdate(op_diag, [[1.0], [0.0]], diag_update=[2.0])
+    debugging.assert_near(op_lru.matmul(rhs), op_lru.to_dense() @ rhs)
+    op_lru_raw = tf.linalg.LinearOperatorLowRankUpdate(mat, [[1.0], [0.0]])
+    debugging.assert_near(op_lru_raw.matmul(rhs), op_lru_raw.to_dense() @ rhs)
+
+    op_perm = tf.linalg.LinearOperatorPermutation([1, 0])
+    debugging.assert_near(op_perm.matmul(rhs), [[4.0], [5.0]])
+    debugging.assert_near(op_perm.matmul(rhs, adjoint=True), [[4.0], [5.0]])
+    debugging.assert_near(op_perm.log_abs_determinant(), 0.0)
+    assert tf.linalg.LinearOperatorPermutation(0).matmul(Tensor([[3.0]])).shape == (1, 1)
+
+    op_sc = tf.linalg.LinearOperatorScaledIdentity(2, 3.0)
+    debugging.assert_near(op_sc.diag_part(), [3.0, 3.0])
+    debugging.assert_near(op_sc.trace(), 6.0)
+    debugging.assert_near(op_sc.determinant(), 9.0)
+    debugging.assert_near(op_sc.matmul(rhs), rhs * 3.0)
+    debugging.assert_near(op_sc.solve(rhs * 3.0), rhs)
+
+    op_toep = tf.linalg.LinearOperatorToeplitz([1.0, 2.0], [1.0, 3.0])
+    debugging.assert_near(op_toep.to_dense(), [[1.0, 3.0], [2.0, 1.0]])
+    op_trid = tf.linalg.LinearOperatorTridiag(diags_compact)
+    assert op_trid.to_dense().shape == (2, 2)
+
+    op_z = tf.linalg.LinearOperatorZeros(2, 2)
+    debugging.assert_near(op_z.determinant(), 0.0)
+    debugging.assert_near(op_z.trace(), 0.0)
+    debugging.assert_near(op_z.matmul(rhs), [[0.0], [0.0]])
+    assert op_full.diag_part().shape == (2,)
+
+    # Batched 3-D linalg decompositions & functions
+    b_mat = Tensor([[[4.0, 1.0], [1.0, 3.0]], [[2.0, 0.0], [0.0, 5.0]]])
+    b_rhs = Tensor([[[5.0], [4.0]], [[4.0], [10.0]]])
+    assert tf.linalg.band_part(b_mat, 0, 0).shape == (2, 2, 2)
+    assert tf.linalg.cholesky(b_mat).shape == (2, 2, 2)
+    assert tf.linalg.diag(Tensor([[1.0, 2.0], [3.0, 4.0]]), k=1, num_rows=3, num_cols=3).shape == (
+        2,
+        3,
+        3,
+    )
+    assert tf.linalg.diag(Tensor([1.0, 2.0]), num_rows=3, num_cols=3).shape == (3, 3)
+    assert tf.linalg.matrix_transpose(mat, conjugate=False).shape == (2, 2)
+    assert tf.linalg.set_diag(mat, Tensor([1.0]), k=1).shape == (2, 2)
+    assert tf.linalg.diag_part(b_mat, k=(-1, 1)).shape == (2, 3, 2)
+    assert tf.linalg.diag_part(b_mat, k=0).shape == (2, 2)
+    e_vals, e_vecs = tf.linalg.eigh(b_mat)
+    assert e_vals.shape == (2, 2) and e_vecs.shape == (2, 2, 2)
+    assert tf.linalg.expm(b_mat).shape == (2, 2, 2)
+    assert tf.linalg.eye(2, batch_shape=(2,)).shape == (2, 2, 2)
+    assert tf.linalg.inv(b_mat).shape == (2, 2, 2)
+    assert tf.linalg.lstsq(b_mat, b_rhs).shape == (2, 2, 1)
+    assert tf.linalg.lstsq(mat, rhs, l2_regularizer=0.1).shape == (2, 1)
+    b_lu, b_p = tf.linalg.lu(b_mat)
+    assert b_lu.shape == (2, 2, 2) and b_p.shape == (2, 2)
+    p_mat = Tensor([[0.0, 2.0], [3.0, 1.0]])
+    p_lu, p_perm = tf.linalg.lu(p_mat)
+    debugging.assert_near(tf.linalg.lu_reconstruct(p_lu, p_perm), p_mat)
+    b_q, b_r = tf.linalg.qr(b_mat, full_matrices=True)
+    assert b_q.shape == (2, 2, 2) and b_r.shape == (2, 2, 2)
+    q_2d, r_2d = tf.linalg.qr(mat, full_matrices=False)
+    assert q_2d.shape == (2, 2) and r_2d.shape == (2, 2)
+    s_2d, u_2d, v_2d = tf.linalg.svd(mat, compute_uv=True)
+    assert s_2d.shape == (2,) and u_2d.shape == (2, 2) and v_2d.shape == (2, 2)
+    assert tf.linalg.set_diag(b_mat, Tensor([[9.0, 8.0], [7.0, 6.0]])).shape == (2, 2, 2)
+    assert tf.linalg.set_diag(
+        b_mat,
+        Tensor([[[1.0, 0.0], [9.0, 8.0], [2.0, 0.0]], [[1.0, 0.0], [7.0, 6.0], [2.0, 0.0]]]),
+        k=(-1, 1),
+    ).shape == (2, 2, 2)
+    assert tf.linalg.solve(b_mat, b_rhs).shape == (2, 2, 1)
+    assert tf.linalg.sqrtm(b_mat).shape == (2, 2, 2)
+    b_s, b_u, b_v = tf.linalg.svd(b_mat, full_matrices=True, compute_uv=True)
+    assert b_s.shape == (2, 2) and b_u.shape == (2, 2, 2) and b_v.shape == (2, 2, 2)
+    b_s_only = tf.linalg.svd(b_mat, compute_uv=False)
+    assert isinstance(b_s_only, Tensor) and b_s_only.shape == (2, 2)
+    s_only = tf.linalg.svd(mat, compute_uv=False)
+    assert isinstance(s_only, Tensor) and s_only.shape == (2,)
+    assert tf.linalg.trace(b_mat).shape == (2,)
+    assert tf.linalg.triangular_solve(tf.linalg.band_part(b_mat, -1, 0), b_rhs).shape == (2, 2, 1)
+    assert tf.linalg.l2_normalize(Tensor([[3.0, 4.0]]), axis=(0, 1)).shape == (1, 2)
 
     # Test new linalg solver and decomposition methods
     assert tf.linalg.banded_triangular_solve(tril_mat, rhs).shape == (2, 1)
@@ -469,12 +674,84 @@ def test_linalg_extended_ops() -> None:
     assert tf.linalg.solve(mat, rhs, adjoint=True).shape == (2, 1)
 
     # Test new tf.nn wrappers and functions
-    w_dev = nn.RNNCellDeviceWrapper(cell="c", device="/cpu:0")
+    def _dummy_cell(inp: TensorOperand, st: TensorOperand) -> tuple[Tensor, TensorOperand]:
+        """Dummy RNN cell returning `(inp * 2, st)`.
+
+        Args:
+            inp: Step input.
+            st: Step state.
+
+        Returns:
+            tuple[Tensor, TensorOperand]: Output and state.
+        """
+        return (Tensor(inp) * 2.0, st)
+
+    def _dummy_cell_single(inp: TensorOperand, st: TensorOperand) -> Tensor:
+        """Dummy RNN cell returning single `Tensor`.
+
+        Args:
+            inp: Step input.
+            st: Step state.
+
+        Returns:
+            Tensor: Output tensor.
+        """
+        del st
+        return Tensor(inp) + 1.0
+
+    w_dev = nn.RNNCellDeviceWrapper(cell=_dummy_cell, device="/cpu:0")
     assert w_dev.device == "/cpu:0"
-    w_drop = nn.RNNCellDropoutWrapper(cell="c", input_keep_prob=0.8)
+    out_dev, _ = w_dev(Tensor([2.0]), Tensor([1.0]))
+    debugging.assert_near(out_dev, [4.0])
+    assert nn.RNNCellDeviceWrapper(cell=_dummy_cell_single)(Tensor([2.0]), Tensor([1.0]))[
+        0
+    ].numpy() == [3.0]
+    assert nn.RNNCellDeviceWrapper(cell=None)(Tensor([2.0]), Tensor([1.0]))[0].numpy() == [2.0]
+
+    w_drop = nn.RNNCellDropoutWrapper(
+        cell=_dummy_cell,
+        input_keep_prob=0.8,
+        output_keep_prob=0.8,
+        state_keep_prob=0.8,
+        seed=42,
+    )
     assert w_drop.input_keep_prob == 0.8
-    w_res = nn.RNNCellResidualWrapper(cell="c")
-    assert w_res.cell == "c"
+    assert w_drop(Tensor([2.0]), Tensor([1.0]))[0].shape == (1,)
+    assert nn.RNNCellDropoutWrapper(cell=_dummy_cell_single)(Tensor([2.0]), Tensor([1.0]))[
+        0
+    ].shape == (1,)
+    assert nn.RNNCellDropoutWrapper(cell=None)(Tensor([2.0]), None)[0].shape == (1,)
+
+    w_res = nn.RNNCellResidualWrapper(cell=_dummy_cell)
+    debugging.assert_near(w_res(Tensor([2.0]), Tensor([1.0]))[0], [6.0])
+    w_res_fn = nn.RNNCellResidualWrapper(
+        cell=_dummy_cell_single,
+        residual_fn=lambda i, o: Tensor(i) + Tensor(o) * 2.0,
+    )
+    debugging.assert_near(w_res_fn(Tensor([2.0]), Tensor([1.0]))[0], [8.0])
+    assert nn.RNNCellResidualWrapper(cell=None)(Tensor([2.0]), Tensor([1.0]))[0].numpy() == [4.0]
+
+    # NCHW / NCDHW conv2d and conv3d tests
+    x_nchw = tf.ones((1, 2, 4, 4), dtype=tf.float32)
+    f_nchw = tf.ones((2, 2, 2, 3), dtype=tf.float32)
+    assert nn.conv2d(
+        x_nchw,
+        f_nchw,
+        strides=[1, 1, 2, 2],
+        padding="SAME",
+        data_format="NCHW",
+        dilations=[1, 1, 1, 1],
+    ).shape == (1, 3, 2, 2)
+    x_ncdhw = tf.ones((1, 2, 3, 3, 3), dtype=tf.float32)
+    f_ncdhw = tf.ones((2, 2, 2, 2, 4), dtype=tf.float32)
+    assert nn.conv3d(
+        x_ncdhw,
+        f_ncdhw,
+        strides=[1, 1, 1, 1, 1],
+        padding="SAME",
+        data_format="NCDHW",
+        dilations=[1, 1, 1, 1, 1],
+    ).shape == (1, 4, 3, 3, 3)
 
     assert len(nn.all_candidate_sampler([[0]], 1, 2, True)) == 3
     x4d = tf.ones((1, 2, 2, 2), dtype=tf.float32)
@@ -485,37 +762,81 @@ def test_linalg_extended_ops() -> None:
         Tensor,
     )
     debugging.assert_near(nn.bias_add(Tensor([1.0, 2.0]), Tensor([0.5, 1.5])), [1.5, 3.5])
+    assert nn.bias_add(tf.ones((1, 2, 3, 3)), Tensor([1.0, 2.0]), data_format="NCHW").shape == (
+        1,
+        2,
+        3,
+        3,
+    )
     assert len(nn.collapse_repeated([[1, 1, 2]], [3])) == 2
     assert len(nn.compute_accidental_hits([[0]], [0, 1], 1)) == 3
     debugging.assert_near(nn.compute_average_loss(Tensor([2.0, 4.0]), sample_weight=1.0), 3.0)
     debugging.assert_near(nn.compute_average_loss(Tensor(4.0), global_batch_size=2), 2.0)
 
-    x3d_c = tf.ones((1, 2, 2), dtype=tf.float32)
+    x3d_c = Tensor(
+        [
+            [[0.1, 5.0, 0.2]],
+            [[0.1, 5.0, 0.2]],
+            [[0.1, 0.2, 6.0]],
+            [[4.0, 0.1, 0.2]],
+        ]
+    )
     f3d_c = tf.ones((2, 2, 2), dtype=tf.float32)
     assert isinstance(
         nn.conv1d_transpose(x4d, f4d, [1, 2, 2, 2], strides=1, padding="VALID"), Tensor
     )
     assert isinstance(nn.conv_transpose(x4d, f4d, [1, 2, 2, 2], strides=1, padding="VALID"), Tensor)
-    assert isinstance(nn.convolution(x3d_c, f3d_c), Tensor)
+    assert isinstance(nn.convolution(tf.ones((1, 2, 2)), f3d_c), Tensor)
 
-    assert len(nn.ctc_beam_search_decoder(x3d_c, [4], beam_width=2, top_paths=1)) == 2
-    assert len(nn.ctc_greedy_decoder(x3d_c, [4])) == 2
+    dec_beam, log_p = nn.ctc_beam_search_decoder(x3d_c, [4], beam_width=2, top_paths=2)
+    assert len(dec_beam) == 2 and log_p.shape == (1, 2)
+    dec_greedy, _ = nn.ctc_greedy_decoder(x3d_c, [4], merge_repeated=True)
+    debugging.assert_equal(dec_greedy[0].values, [1, 0])
+    assert len(nn.ctc_greedy_decoder(None)) == 2
+    assert len(nn.ctc_greedy_decoder(Tensor([1.0, 2.0]))) == 2
     assert len(nn.ctc_unique_labels([[1, 2]])) == 2
     assert nn.depthwise_conv2d_backprop_filter(x4d, (2, 2, 2, 1), x4d).shape == (2, 2, 2, 1)
+    assert nn.depthwise_conv2d_backprop_filter(None, (2, 2, 2, 1), None).shape == (2, 2, 2, 1)
     assert nn.depthwise_conv2d_backprop_input((1, 4, 4, 2), f4d, x4d).shape == (1, 4, 4, 2)
-    assert isinstance(nn.dilation2d(x4d, tf.ones((2, 2, 2))), Tensor)
-    assert isinstance(nn.erosion2d(x4d, tf.ones((2, 2, 2))), Tensor)
+    assert nn.depthwise_conv2d_backprop_input((1, 4, 4, 2), None, None).shape == (1, 4, 4, 2)
+    assert nn.dilation2d(x4d, tf.ones((2, 2, 2)), padding="SAME").shape == (1, 2, 2, 2)
+    assert nn.erosion2d(x4d, tf.ones((2, 2, 2)), padding="VALID").shape == (1, 1, 1, 2)
+    assert nn.dilation2d(None, None).numpy() == 0.0
+    assert nn.dilation2d(Tensor([1.0]), None).shape == (1,)
+    assert nn.dilation2d(x4d, Tensor([1.0])).shape == (1, 2, 2, 2)
     assert isinstance(nn.embedding_lookup_sparse(Tensor([[1.0, 2.0]]), Tensor([0])), Tensor)
     assert isinstance(nn.embedding_lookup_sparse(None, Tensor([0])), Tensor)
     assert isinstance(nn.safe_embedding_lookup_sparse(Tensor([[1.0, 2.0]]), Tensor([0])), Tensor)
     assert len(nn.fixed_unigram_candidate_sampler([[0]], 1, 2, True, 5)) == 3
     assert len(nn.learned_unigram_candidate_sampler([[0]], 1, 2, True, 5)) == 3
-    assert len(nn.fractional_avg_pool(x4d, [1.0, 1.5, 1.5, 1.0])) == 3
-    assert len(nn.isotonic_regression(Tensor([3.0, 1.0, 2.0]))) == 2
+    fap_out, _, _ = nn.fractional_avg_pool(
+        tf.ones((1, 4, 4, 1)), [1.0, 1.5, 1.5, 1.0], overlapping=True
+    )
+    assert fap_out.shape == (1, 2, 2, 1)
+    assert nn.fractional_avg_pool(Tensor([1.0]))[0].shape == (1,)
+    with pytest.raises(NotImplementedError):
+        nn.fractional_avg_pool(None)
+    iso_y, iso_seg = nn.isotonic_regression(Tensor([1.0, 3.0, 2.0]), decreasing=True)
+    debugging.assert_near(iso_y, [2.0, 2.0, 2.0])
+    assert iso_seg.shape == (3,)
+    iso_2d, _ = nn.isotonic_regression(Tensor([[3.0, 1.0, 2.0]]), decreasing=False)
+    debugging.assert_near(iso_2d, [[2.0, 2.0, 2.0]])
+    assert nn.isotonic_regression(None)[0].numpy() == 0.0
+    assert nn.isotonic_regression(Tensor(1.0))[0].numpy() == 1.0
+    assert nn.isotonic_regression(x4d)[0].shape == (1, 2, 2, 2)
     debugging.assert_near(nn.l2_loss(Tensor([2.0, 4.0])), 10.0)
     assert isinstance(nn.log_poisson_loss(Tensor([1.0]), Tensor([0.0])), Tensor)
-    val_p, idx_p = nn.max_pool_with_argmax(x4d, ksize=2, strides=2, padding="VALID")
-    assert val_p.shape == (1, 1, 1, 2) and idx_p.shape == (1, 1, 1, 2)
+    val_p, idx_p = nn.max_pool_with_argmax(
+        Tensor([[[[1.0, 2.0], [5.0, 1.0]], [[3.0, 4.0], [2.0, 8.0]]]]),
+        ksize=2,
+        strides=2,
+        padding="VALID",
+        include_batch_in_index=True,
+    )
+    debugging.assert_near(val_p, [[[[5.0, 8.0]]]])
+    debugging.assert_equal(idx_p, [[[[2, 7]]]])
+    assert nn.max_pool_with_argmax(x4d, ksize=2, strides=1, padding="SAME")[0].shape == (1, 2, 2, 2)
+    assert nn.max_pool_with_argmax(Tensor([[[1.0, 2.0], [3.0, 4.0]]]))[0].shape == (1, 1, 2)
     assert nn.pool(x4d, (2, 2), "AVG", strides=(2, 2), padding="VALID").shape == (1, 1, 1, 2)
     assert nn.pool(x4d, (2, 2), "MAX", strides=(2, 2), padding="VALID").shape == (1, 1, 1, 2)
     debugging.assert_near(nn.relu6(Tensor([-1.0, 3.0, 8.0])), [0.0, 3.0, 6.0])
@@ -530,4 +851,20 @@ def test_linalg_extended_ops() -> None:
     )
     assert wm_m.shape == () and wm_v.shape == ()
     assert isinstance(nn.with_space_to_batch(x4d, 1, "VALID", None), Tensor)
+    assert nn.with_space_to_batch(None).numpy() == 0.0
+    s2b_res = nn.with_space_to_batch(
+        x4d,
+        dilation_rate=[1, 1],
+        padding="SAME",
+        op=lambda padded, num_sp, pad_mode: padded,
+        filter_shape=[2, 2],
+    )
+    assert s2b_res.shape == (1, 2, 2, 2)
+    s2b_val = nn.with_space_to_batch(
+        x4d,
+        dilation_rate=1,
+        padding="VALID",
+        op=lambda padded, num_sp, pad_mode: padded,
+    )
+    assert s2b_val.shape == (1, 2, 2, 2)
     assert tf.zeros((2,), dtype="float32").dtype == tf.float32

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import functools
+import inspect
 import itertools
 import operator
 import uuid
@@ -13,7 +14,7 @@ from typing import Generic, TypeVar
 
 from zero_tensorflow._typing import (
     ArrayLikeProtocol,
-    CallableOperandProtocol,
+    GradFnProtocol,
     TensorOperand,
     TensorSpecProtocol,
     as_operand,
@@ -26,6 +27,7 @@ from zero_tensorflow.core_tensor import (
     _wrap_tensor,
     to_dtype,
 )
+from zero_tensorflow.spec_types import Graph, TensorSpec
 
 import ml_switcheroo_compiler.ops as _ops
 from ml_switcheroo_compiler.interpreter.evaluator import EvalValue, evaluate_graph
@@ -40,7 +42,7 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R")
 _CustomGradOut = TypeVar(
     "_CustomGradOut",
-    bound="Tensor | TensorOperand | tuple[Tensor | TensorOperand, CallableOperandProtocol]",
+    bound="Tensor | TensorOperand | tuple[Tensor | TensorOperand, GradFnProtocol]",
 )
 
 _TAPE_STACK: list[GradientTape] = []
@@ -55,7 +57,8 @@ class _CustomGradRecord:
         out_tensor: Tensor,
         in_tensors: list[Tensor],
         in_node_ids: list[str],
-        grad_fn: CallableOperandProtocol,
+        grad_fn: GradFnProtocol,
+        variables: list[Variable] | None = None,
     ) -> None:
         """Initialize `_CustomGradRecord`.
 
@@ -65,12 +68,14 @@ class _CustomGradRecord:
             in_tensors: Input `Tensor` operands passed to the custom-gradient function.
             in_node_ids: Node IDs of `in_tensors` in the active `LogicalGraph`.
             grad_fn: Backward gradient callback returned by the custom-gradient function.
+            variables: Optional list of `Variable`s accessed during the forward pass.
         """
         self.out_node_id = out_node_id
         self.out_tensor = out_tensor
         self.in_tensors = in_tensors
         self.in_node_ids = in_node_ids
         self.grad_fn = grad_fn
+        self.variables: list[Variable] = list(variables) if variables is not None else []
 
 
 _CUSTOM_GRAD_RECORDS: dict[int, list[_CustomGradRecord]] = {}
@@ -144,6 +149,8 @@ class _ConcreteFunction(Generic[_P, _R]):
         func: Callable[_P, _R],
         signature_key: str,
         graph: LogicalGraph,
+        example_args: Sequence[TensorOperand | TensorSpecProtocol] = (),
+        example_kwargs: Mapping[str, TensorOperand | TensorSpecProtocol] | None = None,
     ) -> None:
         """Initialize `_ConcreteFunction`.
 
@@ -151,10 +158,45 @@ class _ConcreteFunction(Generic[_P, _R]):
             func: Underlying Python callable.
             signature_key: Canonical cache key string for this specialization.
             graph: Traced `LogicalGraph` instance.
+            example_args: Example positional arguments or `TensorSpec`s.
+            example_kwargs: Example keyword arguments or `TensorSpec`s.
         """
         self._func = func
         self.signature_key = signature_key
-        self.graph = graph
+        self._logical_graph = graph
+        self.graph = Graph()
+        self.graph._logical_graph = graph
+        self.inputs: list[Tensor] = []
+        self.outputs: list[Tensor] = []
+        arg_specs: list[TensorSpec | TensorOperand] = []
+        for idx, a in enumerate(example_args):
+            if isinstance(a, TensorSpecProtocol):
+                spec_obj = TensorSpec(shape=tuple(a.shape), dtype=a.dtype, name=f"arg_{idx}")
+                arg_specs.append(spec_obj)
+                concrete_shape = tuple(1 if d is None else int(d) for d in a.shape)
+                self.inputs.append(
+                    _wrap_tensor(
+                        _ops.zeros(concrete_shape, dtype=to_dtype(a.dtype).as_compiler_dtype)
+                    )
+                )
+            elif isinstance(a, Tensor):
+                arg_specs.append(TensorSpec.from_value(a))
+                self.inputs.append(a)
+            else:
+                arg_specs.append(a)
+        kw_specs: dict[str, TensorSpec | TensorOperand] = {
+            k: (
+                TensorSpec(shape=tuple(v.shape), dtype=v.dtype, name=k)
+                if isinstance(v, TensorSpecProtocol)
+                else (TensorSpec.from_value(v) if isinstance(v, Tensor) else v)
+            )
+            for k, v in (example_kwargs or {}).items()
+        }
+        self.structured_input_signature: tuple[
+            tuple[TensorSpec | TensorOperand, ...],
+            dict[str, TensorSpec | TensorOperand],
+        ] = (tuple(arg_specs), kw_specs)
+        self.structured_outputs: TensorSpec | tuple[TensorSpec, ...] | None = None
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _R:
         """Execute the compiled function for `*args` and `**kwargs`.
@@ -166,6 +208,7 @@ class _ConcreteFunction(Generic[_P, _R]):
         Returns:
             _R: Function output.
         """
+        self.inputs = [a for a in args if isinstance(a, Tensor)]
         for a in args:
             _to_tensor_if_possible(a)
         for v in kwargs.values():
@@ -183,7 +226,8 @@ class _ConcreteFunction(Generic[_P, _R]):
             _tracer.is_tracing = prev_is_tracing
             _tracer.active_graph = prev_graph
 
-        self.graph = traced_graph
+        self._logical_graph = traced_graph
+        self.graph._logical_graph = traced_graph
         if (
             isinstance(res, Tensor)
             and res._tensor is not None
@@ -195,9 +239,14 @@ class _ConcreteFunction(Generic[_P, _R]):
             traced_graph.outputs = [node_id]
             evaluated = evaluate_graph(traced_graph, {})
             res._tensor = _to_tensor(as_operand(evaluated[node_id]), dtype=res.dtype)
+            self.outputs = [res]
+            self.structured_outputs = TensorSpec.from_value(res)
         elif isinstance(res, builtins.tuple):
             for r in res:
                 _to_tensor_if_possible(r)
+            out_tensors = [r for r in res if isinstance(r, Tensor)]
+            self.outputs = out_tensors
+            self.structured_outputs = tuple(TensorSpec.from_value(t) for t in out_tensors)
         else:
             _to_tensor_if_possible(res)
         return res
@@ -240,7 +289,8 @@ class _PolymorphicFunction(Generic[_P, _R]):
             args: Positional call arguments.
 
         Raises:
-            ValueError: If argument count or tensor shape/dtype does not match `input_signature`.
+            TypeError: If an argument is not compatible with the expected `TensorSpec` dtype.
+            ValueError: If argument count or tensor shape does not match `input_signature`.
         """
         if self.input_signature is None:
             return
@@ -251,13 +301,18 @@ class _PolymorphicFunction(Generic[_P, _R]):
             )
         for arg, spec in zip(args, self.input_signature):
             spec_shape = builtins.tuple(spec.shape)
-            if isinstance(arg, Tensor) and (
-                len(arg.shape) != len(spec_shape)
-                or any(sd is not None and sd != ad for sd, ad in zip(spec_shape, arg.shape))
-            ):
-                raise ValueError(
-                    f"Incompatible argument shape {arg.shape} for spec shape {spec_shape}."
-                )
+            spec_dtype = to_dtype(spec.dtype)
+            if isinstance(arg, Tensor):
+                if len(arg.shape) != len(spec_shape) or any(
+                    sd is not None and sd != ad for sd, ad in zip(spec_shape, arg.shape)
+                ):
+                    raise ValueError(
+                        f"Incompatible argument shape {arg.shape} for spec shape {spec_shape}."
+                    )
+                if arg.dtype is not None and to_dtype(arg.dtype) != spec_dtype:
+                    raise TypeError(
+                        f"Incompatible argument dtype {arg.dtype} for spec dtype {spec_dtype}."
+                    )
 
     def get_concrete_function(
         self,
@@ -282,6 +337,8 @@ class _PolymorphicFunction(Generic[_P, _R]):
                 self._func,
                 key,
                 LogicalGraph(name="tf_function"),
+                example_args=eff_args,
+                example_kwargs=kwargs,
             )
         return self._concrete_cache[key]
 
@@ -336,7 +393,7 @@ def function(
         experimental_follow_type_hints: Whether to use type annotations to optimize tracing.
 
     Returns:
-        _PolymorphicFunction[_P, _R]: Polymorphic graph-traced callable.
+        _PolymorphicFunction[_P, _R]: Polymorphic graph-traced callable (or decorator factory when `func` is `None`).
     """
     del (
         experimental_implements,
@@ -346,8 +403,29 @@ def function(
         experimental_compile,
         experimental_follow_type_hints,
     )
+    if func is None:
+
+        def _decorator(fn: Callable[_P, _R]) -> _PolymorphicFunction[_P, _R]:
+            """Decorate `fn` into a `_PolymorphicFunction`.
+
+            Args:
+                fn: Target Python function.
+
+            Returns:
+                _PolymorphicFunction[_P, _R]: Wrapped polymorphic function.
+            """
+            return _PolymorphicFunction(
+                fn,
+                input_signature=input_signature,
+                autograph=autograph,
+                jit_compile=jit_compile,
+                reduce_retracing=reduce_retracing,
+            )
+
+        return _decorator  # type: ignore[return-value]
+
     return _PolymorphicFunction(
-        func,  # type: ignore[arg-type]
+        func,
         input_signature=input_signature,
         autograph=autograph,
         jit_compile=jit_compile,
@@ -388,7 +466,7 @@ def _zero_like_source(source: Tensor) -> Tensor:
     prev_tracing = _tracer.is_tracing
     _tracer.is_tracing = False
     try:
-        dt = source.dtype
+        dt = source.dtype.as_compiler_dtype if source.dtype is not None else None
         shape = source.shape
         return _wrap_tensor(_ops.zeros(shape, dtype=dt))
     finally:
@@ -407,7 +485,8 @@ def _ones_like_source(source: Tensor) -> Tensor:
     prev_tracing = _tracer.is_tracing
     _tracer.is_tracing = False
     try:
-        return _wrap_tensor(_ops.ones(source.shape, dtype=source.dtype))
+        dt = source.dtype.as_compiler_dtype if source.dtype is not None else None
+        return _wrap_tensor(_ops.ones(source.shape, dtype=dt))
     finally:
         _tracer.is_tracing = prev_tracing
 
@@ -459,13 +538,36 @@ def _add_cotangent_node(
     return cot_id
 
 
+def _normalize_unconnected_gradients(unconnected_gradients: str | TensorOperand) -> str:
+    """Normalize `unconnected_gradients` string or `UnconnectedGradients` enum to `'none'` or `'zero'`.
+
+    Args:
+        unconnected_gradients: String or `UnconnectedGradients` enum value.
+
+    Returns:
+        str: Normalized mode (`'none'` or `'zero'`).
+
+    Raises:
+        ValueError: If `unconnected_gradients` is not `'none'` or `'zero'`.
+    """
+    mode = str(unconnected_gradients).lower()
+    if mode.endswith(".zero"):
+        mode = "zero"
+    if mode not in ("none", "zero"):
+        raise ValueError(
+            f"Unknown value for unconnected_gradients: {unconnected_gradients!r}. "
+            "Expected 'none' or 'zero'."
+        )
+    return mode
+
+
 def _compute_raw_symbolic_grad(
     graph: LogicalGraph,
     target_id: str,
     wrt_id: str,
     source: Tensor,
     cotangent_id: str | None = None,
-    unconnected_gradients: str = "none",
+    unconnected_gradients: str | TensorOperand = "none",
 ) -> tuple[Tensor | None, LogicalGraph, str | None]:
     """Differentiate `target_id` wrt `wrt_id` on `graph` using symbolic VJP rules.
 
@@ -480,7 +582,7 @@ def _compute_raw_symbolic_grad(
     Returns:
         tuple[Tensor | None, LogicalGraph, str | None]: `(grad_tensor, grad_graph, grad_out_id)`.
     """
-    mode = unconnected_gradients.lower()
+    mode = _normalize_unconnected_gradients(unconnected_gradients)
     cot_map: dict[str, str] | None = {target_id: cotangent_id} if cotangent_id is not None else None
     grad_graph = _symbolic_grad(graph, [wrt_id], target_id, cotangent_id=cot_map)
     grad_out_id = grad_graph.outputs[0] if grad_graph.outputs else None
@@ -501,13 +603,58 @@ def _compute_raw_symbolic_grad(
     return (_materialize_evaluated_grad(raw_val, source), grad_graph, grad_out_id)
 
 
+def _invoke_custom_grad_fn(
+    grad_fn: GradFnProtocol,
+    upstream_dy: Tensor,
+    variables: list[Variable],
+) -> tuple[list[TensorOperand], list[TensorOperand]]:
+    """Invoke `grad_fn(upstream_dy)` or `grad_fn(upstream_dy, variables=...)` based on signature.
+
+    Args:
+        grad_fn: Custom gradient callback.
+        upstream_dy: Upstream cotangent tensor.
+        variables: Watched `Variable`s associated with the forward call.
+
+    Returns:
+        tuple[list[TensorOperand], list[TensorOperand]]: `(input_grads, variable_grads)`.
+    """
+    sig = inspect.signature(grad_fn)
+    has_vars_param = "variables" in sig.parameters or any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    )
+    if has_vars_param and variables:
+        raw_cg = grad_fn(upstream_dy, variables=variables)
+        in_part, var_part = (
+            (raw_cg[0], raw_cg[1])
+            if isinstance(raw_cg, builtins.tuple) and len(raw_cg) == 2
+            else (raw_cg, [])
+        )
+        in_list = (
+            builtins.list(in_part)
+            if isinstance(in_part, (builtins.list, builtins.tuple))
+            else [in_part]
+        )
+        var_list = (
+            builtins.list(var_part)
+            if isinstance(var_part, (builtins.list, builtins.tuple))
+            else [var_part]
+        )
+        return (in_list, var_list)
+
+    raw_cg = grad_fn(upstream_dy)
+    cg_items: list[TensorOperand] = (
+        builtins.list(raw_cg) if isinstance(raw_cg, (builtins.list, builtins.tuple)) else [raw_cg]
+    )
+    return (cg_items, [])
+
+
 def _compute_single_grad(
     graph: LogicalGraph,
     target_id: str,
     wrt_id: str,
     source: Tensor,
     cotangent_id: str | None = None,
-    unconnected_gradients: str = "none",
+    unconnected_gradients: str | TensorOperand = "none",
 ) -> tuple[Tensor | None, LogicalGraph, str | None]:
     """Differentiate `target_id` with respect to `wrt_id` on `graph` including `@custom_gradient`s.
 
@@ -525,12 +672,7 @@ def _compute_single_grad(
     Raises:
         ValueError: If `unconnected_gradients` is not `'none'` or `'zero'`.
     """
-    mode = unconnected_gradients.lower()
-    if mode not in ("none", "zero"):
-        raise ValueError(
-            f"Unknown value for unconnected_gradients: {unconnected_gradients!r}. "
-            "Expected 'none' or 'zero'."
-        )
+    mode = _normalize_unconnected_gradients(unconnected_gradients)
 
     records = _CUSTOM_GRAD_RECORDS.get(id(graph), [])
     custom_parts: list[Tensor] = []
@@ -559,11 +701,10 @@ def _compute_single_grad(
         prev_tracing = _tracer.is_tracing
         _tracer.is_tracing = False
         try:
-            raw_cg = rec.grad_fn(upstream_dy)
-            cg_items: list[TensorOperand] = (
-                builtins.list(raw_cg)
-                if isinstance(raw_cg, (builtins.list, builtins.tuple))
-                else [raw_cg]
+            cg_items, var_items = _invoke_custom_grad_fn(
+                rec.grad_fn,
+                upstream_dy,
+                rec.variables,
             )
             for inp_t, inp_nid, cg_val in zip(
                 rec.in_tensors,
@@ -585,6 +726,11 @@ def _compute_single_grad(
                     )
                     assert contrib is not None
                     custom_parts.append(contrib)
+            for var_obj, var_grad_val in zip(rec.variables, var_items):
+                if var_obj is source:
+                    custom_parts.append(
+                        _materialize_evaluated_grad(as_operand(var_grad_val), var_obj)
+                    )
         finally:
             _tracer.is_tracing = prev_tracing
 
@@ -805,23 +951,64 @@ class GradientTape:
         if _TAPE_STACK and _TAPE_STACK[-1] is self:
             _tracer.active_graph = self._graph
 
+    def _compute_grad_for_leaf(
+        self,
+        target_id: str,
+        s: Tensor | TensorOperand,
+        cotangent_id: str | None,
+        mode: str,
+    ) -> Tensor | None:
+        """Compute the gradient of `target_id` with respect to a single leaf source `s`.
+
+        Args:
+            target_id: Target node ID in `self._graph`.
+            s: Leaf source `Tensor` or `Variable`.
+            cotangent_id: Optional cotangent node ID.
+            mode: Normalized unconnected gradient mode (`'none'` or `'zero'`).
+
+        Returns:
+            Tensor | None: Gradient tensor for `s`, or `None`.
+        """
+        if not isinstance(s, Tensor):
+            return None
+        wrt_id = _resolve_node_id(s, self._graph)
+        if wrt_id is None or wrt_id not in self._graph.nodes:
+            return _zero_like_source(s) if mode == "zero" else None
+        g_tensor, grad_graph, grad_out_id = _compute_single_grad(
+            self._graph,
+            target_id,
+            wrt_id,
+            s,
+            cotangent_id=cotangent_id,
+            unconnected_gradients=mode,
+        )
+        if g_tensor is not None and grad_out_id is not None and _TAPE_STACK:
+            for active_tape in _TAPE_STACK:
+                active_tape._graph.nodes.update(grad_graph.nodes)
+                g_tensor._traced_node_ids[id(active_tape._graph)] = grad_out_id
+        return g_tensor
+
     def gradient(
         self,
         target: Tensor | None,
-        sources: Tensor | Sequence[Tensor | TensorOperand] | TensorOperand,
+        sources: Tensor
+        | Sequence[Tensor | TensorOperand]
+        | Mapping[str, Tensor | TensorOperand]
+        | TensorOperand,
         output_gradients: Tensor | Sequence[Tensor] | None = None,
-        unconnected_gradients: str = "none",
-    ) -> Tensor | list[Tensor | None] | None:
+        unconnected_gradients: str | TensorOperand = "none",
+    ) -> Tensor | list[Tensor | None] | tuple[Tensor | None, ...] | dict[str, Tensor | None] | None:
         """Compute the gradient using operations recorded in context of this tape.
 
         Args:
             target: Target `Tensor` to differentiate.
-            sources: Single `Tensor`/`Variable` or sequence of `Tensor`s/`Variable`s.
+            sources: Single `Tensor`/`Variable`, sequence, or mapping of `Tensor`s/`Variable`s.
             output_gradients: Optional initial cotangent `Tensor` for `target`.
             unconnected_gradients: How to handle unconnected gradients (`'none'` or `'zero'`).
 
         Returns:
-            Tensor | list[Tensor | None] | None: Computed gradient(s) for `sources`.
+            Tensor | list[Tensor | None] | tuple[Tensor | None, ...] | dict[str, Tensor | None] | None:
+                Computed gradient(s) matching the structure of `sources`.
 
         Raises:
             RuntimeError: If called more than once on a non-persistent tape.
@@ -835,6 +1022,8 @@ class GradientTape:
             )
         if not self.persistent:
             self._used = True
+
+        mode = _normalize_unconnected_gradients(unconnected_gradients)
 
         if target is None:
             return None
@@ -853,39 +1042,18 @@ class GradientTape:
             if isinstance(og_tensor, Tensor) and og_tensor._tensor is not None:
                 cotangent_id = _add_cotangent_node(self._graph, og_tensor)
 
-        is_single = not isinstance(sources, (builtins.list, builtins.tuple))
-        sources_list: list[Tensor | TensorOperand] = (
-            builtins.list(sources)
-            if isinstance(sources, (builtins.list, builtins.tuple))
-            else [sources]
-        )
-
-        res: list[Tensor | None] = []
-        for s in sources_list:
-            if not isinstance(s, Tensor):
-                res.append(None)
-                continue
-            wrt_id = _resolve_node_id(s, self._graph)
-            if wrt_id is None or wrt_id not in self._graph.nodes:
-                res.append(
-                    _zero_like_source(s) if unconnected_gradients.lower() == "zero" else None
-                )
-                continue
-            g_tensor, grad_graph, grad_out_id = _compute_single_grad(
-                self._graph,
-                target_id,
-                wrt_id,
-                s,
-                cotangent_id=cotangent_id,
-                unconnected_gradients=unconnected_gradients,
+        if isinstance(sources, Mapping):
+            return {
+                str(k): self._compute_grad_for_leaf(target_id, v, cotangent_id, mode)
+                for k, v in sources.items()
+            }
+        if isinstance(sources, builtins.tuple):
+            return builtins.tuple(
+                self._compute_grad_for_leaf(target_id, s, cotangent_id, mode) for s in sources
             )
-            if g_tensor is not None and grad_out_id is not None and _TAPE_STACK:
-                for active_tape in _TAPE_STACK:
-                    active_tape._graph.nodes.update(grad_graph.nodes)
-                    g_tensor._traced_node_ids[id(active_tape._graph)] = grad_out_id
-            res.append(g_tensor)
-
-        return res[0] if is_single else res
+        if isinstance(sources, builtins.list):
+            return [self._compute_grad_for_leaf(target_id, s, cotangent_id, mode) for s in sources]
+        return self._compute_grad_for_leaf(target_id, sources, cotangent_id, mode)
 
     def jacobian(
         self,
@@ -908,11 +1076,16 @@ class GradientTape:
         if not isinstance(target, Tensor):
             return None
         if not target.shape:
-            return self.gradient(
+            grad_res = self.gradient(
                 target,
                 sources,
                 unconnected_gradients=unconnected_gradients,
             )
+            if isinstance(grad_res, builtins.tuple):
+                return list(grad_res)
+            if isinstance(grad_res, Mapping):
+                return list(grad_res.values())
+            return grad_res
 
         was_persistent = self.persistent
         self.persistent = True
@@ -1134,12 +1307,20 @@ def custom_gradient(
             if was_tracing and active_graph is not None and grad_fn is not None and in_tensors:
                 _to_tensor(y_tensor)
                 out_nid = str(_resolve_node_id(y_tensor, active_graph))
+                watched_vars: list[Variable] = []
+                for tape_obj in _TAPE_STACK:
+                    for w_var in tape_obj.watched_variables():
+                        if all(w_var is not existing for existing in watched_vars) and all(
+                            w_var is not inp_arg for inp_arg in in_tensors
+                        ):
+                            watched_vars.append(w_var)
                 record = _CustomGradRecord(
                     out_node_id=out_nid,
                     out_tensor=y_tensor,
                     in_tensors=in_tensors,
                     in_node_ids=in_node_ids,
                     grad_fn=grad_fn,
+                    variables=watched_vars,
                 )
                 _CUSTOM_GRAD_RECORDS.setdefault(id(active_graph), []).append(record)
             return y_tensor
@@ -1177,7 +1358,8 @@ def _zero_hessian_for_source(source: Tensor) -> Tensor:
     prev_tracing = _tracer.is_tracing
     _tracer.is_tracing = False
     try:
-        return _wrap_tensor(_ops.zeros(source.shape + source.shape, dtype=source.dtype))
+        dt = source.dtype.as_compiler_dtype if source.dtype is not None else None
+        return _wrap_tensor(_ops.zeros(source.shape + source.shape, dtype=dt))
     finally:
         _tracer.is_tracing = prev_tracing
 

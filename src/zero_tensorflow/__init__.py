@@ -191,6 +191,7 @@ from zero_tensorflow.core_tensor import (
 from zero_tensorflow.core_tensor import (
     to_dtype as to_dtype,
 )
+from zero_tensorflow.dtypes import DType
 from zero_tensorflow.linalg_ops import linalg
 from zero_tensorflow.math_ops import (
     abs,
@@ -304,8 +305,6 @@ from zero_tensorflow.spec_types import (
     VariableSynchronization,
     type_spec_from_value,
 )
-
-from ml_switcheroo_compiler.core.dtype import DType
 
 import zero_keras as keras  # isort: skip
 

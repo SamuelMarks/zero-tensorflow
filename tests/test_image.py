@@ -276,9 +276,12 @@ def test_ensure_tensor_and_tracing() -> None:
     assert image.adjust_contrast(img3, 2.0).shape == (2, 2, 3)
     debugging.assert_near(image.adjust_gamma(Tensor([4.0]), gamma=0.5, gain=2.0), [4.0])
     assert image.adjust_hue(img3, 0.1).shape == (2, 2, 3)
+    assert image.adjust_hue(img3, 0.0).shape == (2, 2, 3)
     assert image.adjust_jpeg_quality(img3, 80).shape == (2, 2, 3)
     assert image.adjust_saturation(img3, 1.2).shape == (2, 2, 3)
-    assert image.central_crop(img3, 0.5).shape == (2, 2, 3)
+    assert image.adjust_saturation(img3, 1.0).shape == (2, 2, 3)
+    assert image.central_crop(tf.ones((4, 4, 3), dtype=tf.float32), 0.5).shape == (2, 2, 3)
+    assert image.central_crop(img3, 1.0).shape == (2, 2, 3)
     assert len(image.combined_non_max_suppression(img4, img3, 1, 2)) == 4
     assert image.convert_image_dtype(img3, "float32").dtype == tf.float32
     assert image.decode_and_crop_jpeg(b"abc", [0, 0, 1, 1], channels=3).shape == (1, 1, 3)
@@ -295,8 +298,11 @@ def test_ensure_tensor_and_tracing() -> None:
         2,
         3,
     )
-    assert isinstance(image.encode_jpeg(img3), Tensor)
-    assert isinstance(image.encode_png(img3), Tensor)
+    u8_img = Tensor([[[10, 20, 30], [40, 50, 60]]], dtype=tf.uint8)
+    jpg_enc = image.encode_jpeg(u8_img)
+    debugging.assert_equal(image.decode_jpeg(jpg_enc), u8_img)
+    png_enc = image.encode_png(u8_img)
+    debugging.assert_equal(image.decode_png(png_enc), u8_img)
     assert image.extract_glimpse(img4, [1, 1], [[0.0, 0.0]]).shape == (1, 2, 2, 3)
     debugging.assert_equal(image.extract_jpeg_shape(b"jpg"), [1, 1, 3])
     assert image.flip_left_right(img3).shape == (2, 2, 3)
@@ -307,15 +313,19 @@ def test_ensure_tensor_and_tracing() -> None:
     assert image.grayscale_to_rgb(tf.ones((2, 2, 1), dtype=tf.float32)).shape == (2, 2, 3)
     dy, dx = image.image_gradients(img4)
     assert dy.shape == (1, 2, 2, 3) and dx.shape == (1, 2, 2, 3)
+    assert image.image_gradients(tf.ones((1, 1, 1, 1), dtype=tf.float32))[0].shape == (1, 1, 1, 1)
+    assert image.image_gradients(Tensor([1.0]))[0].shape == (1,)
     assert bool(image.is_jpeg(b"\xff\xd8\xff")) is True
     assert bool(image.is_jpeg("\xff\xd8")) is True
     assert bool(image.is_jpeg(b"png")) is False
     assert image.non_max_suppression_overlaps([[1.0]], [0.9], 1).shape == (1,)
     sel_i, sel_s = image.non_max_suppression_with_scores([[0.0, 0.0, 1.0, 1.0]], [0.9], 1)
     assert sel_i.shape == (1,) and sel_s.shape == (1,)
+    debugging.assert_near(sel_s, [0.9])
     assert image.pad_to_bounding_box(img3, 0, 0, 4, 4).shape == (4, 4, 3)
     assert image.per_image_standardization(img3).shape == (2, 2, 3)
     debugging.assert_near(image.psnr(img3, img3, max_val=1.0), 40.0)
+    debugging.assert_near(image.psnr(img3, tf.zeros((2, 2, 3)), max_val=1.0), 0.0)
     assert image.random_crop(img3, (1, 1, 3)).shape == (1, 1, 3)
     assert image.random_flip_up_down(img3, seed=1).shape == (2, 2, 3)
     assert image.random_hue(img3, 0.1, seed=1).shape == (2, 2, 3)
@@ -345,7 +355,9 @@ def test_ensure_tensor_and_tracing() -> None:
     assert image.stateless_random_hue(img3, 0.1, [1, 2]).shape == (2, 2, 3)
     assert image.stateless_random_jpeg_quality(img3, 70, 90, [1, 2]).shape == (2, 2, 3)
     assert image.stateless_random_saturation(img3, 0.5, 1.5, [1, 2]).shape == (2, 2, 3)
-    debugging.assert_near(image.total_variation(img4), 0.0)
+    debugging.assert_near(image.total_variation(img4), [0.0])
+    debugging.assert_near(image.total_variation(img3), 0.0)
+    debugging.assert_near(image.total_variation(Tensor([1.0])), 0.0)
     assert image.transpose(tf.ones((1, 2, 3, 4), dtype=tf.float32)).shape == (1, 3, 2, 4)
     assert image.transpose(tf.ones((2, 3, 4), dtype=tf.float32)).shape == (3, 2, 4)
     assert image.transpose(Tensor([1.0, 2.0])).shape == (2,)

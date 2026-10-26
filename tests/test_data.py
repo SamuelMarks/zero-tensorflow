@@ -78,6 +78,10 @@ def test_dataset_batch() -> None:
     assert list(ds_batched) == [[1, 2], [3, 4], [5]]
     ds_batched_drop = ds1.batch(2, drop_remainder=True)
     assert list(ds_batched_drop) == [[1, 2], [3, 4]]
+    ds_pbatch = ds1.padded_batch(2, drop_remainder=False)
+    assert list(ds_pbatch) == [[1, 2], [3, 4], [5]]
+    assert ds_pbatch.element_spec is None
+    assert data.experimental.Counter().cardinality() == data.INFINITE_CARDINALITY
     with pytest.raises(ValueError):
         ds1.batch(0)
 

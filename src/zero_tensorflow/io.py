@@ -38,9 +38,6 @@ from ml_switcheroo_compiler.ops.io import (
     decode_gif as _decode_gif,
 )
 from ml_switcheroo_compiler.ops.io import (
-    decode_image as _decode_image,
-)
-from ml_switcheroo_compiler.ops.io import (
     encode_base64 as _encode_base64,
 )
 from ml_switcheroo_compiler.ops.io import (
@@ -184,7 +181,7 @@ def decode_tfrecord_frames(raw_stream: bytes) -> list[bytes]:
 
 
 def _extract_raw_bytes(contents: TensorOperand) -> bytes:
-    """Extract raw `bytes` from a `bytes` or `str` operand.
+    """Extract raw `bytes` from a `Tensor`, `bytes`, or `str` operand.
 
     Args:
         contents: Input byte-like operand.
@@ -192,10 +189,11 @@ def _extract_raw_bytes(contents: TensorOperand) -> bytes:
     Returns:
         bytes: Extracted byte string.
     """
+    raw_val = contents.tolist() if isinstance(contents, Tensor) else contents
     return (
-        contents
-        if isinstance(contents, bytes)
-        else (contents.encode("latin1") if isinstance(contents, str) else b"")
+        raw_val
+        if isinstance(raw_val, bytes)
+        else (raw_val.encode("latin1") if isinstance(raw_val, str) else b"")
     )
 
 
@@ -524,14 +522,46 @@ def decode_png(
         **kwargs: Additional keyword options.
 
     Returns:
-        Tensor: Decoded PNG image `Tensor`.
+        Tensor: Decoded PNG image `Tensor` of shape `[height, width, channels]`.
     """
     del kwargs
     png_sig = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
-    arg: bytes = (
-        contents if isinstance(contents, bytes) and contents.startswith(png_sig) else encode_png()
+    raw = _extract_raw_bytes(contents)
+    arg: bytes = raw if raw.startswith(png_sig) else encode_png()
+
+    pos = 8
+    w, h, color_type = 1, 1, 2
+    idat_chunks = bytearray()
+    while pos + 8 <= len(arg):
+        (length,) = struct.unpack(">I", arg[pos : pos + 4])
+        ctype = arg[pos + 4 : pos + 8]
+        cdata = arg[pos + 8 : pos + 8 + length]
+        if ctype == b"IHDR":
+            w, h, _, color_type = struct.unpack(">IIBB", cdata[:10])
+        elif ctype == b"IDAT":
+            idat_chunks.extend(cdata)
+        pos += 12 + length
+
+    ch_map = {0: 1, 2: 3, 4: 2, 6: 4}
+    in_c = ch_map.get(color_type, 3)
+    out_c = channels if channels > 0 else in_c
+    decompressed = (
+        zlib.decompress(bytes(idat_chunks)) if idat_chunks else b"\x00" * (h * (1 + w * in_c))
     )
-    return _wrap_tensor(_decode_image(arg, channels))
+    row_stride = 1 + w * in_c
+    pixels: list[int] = []
+    for r in range(h):
+        r_start = r * row_stride + 1
+        row_data = decompressed[r_start : r_start + w * in_c]
+        for col in range(w):
+            px = [int(b) for b in row_data[col * in_c : (col + 1) * in_c]]
+            padded_px = (px + [px[-1] if px else 0] * out_c)[:out_c]
+            pixels.extend(padded_px)
+    reshaped = msc_ops.shape.frontend.reshape(
+        _to_tensor(pixels, dtype=msc_dtype.DType.UInt8),
+        (h, w, out_c),
+    )
+    return _wrap_tensor(reshaped)
 
 
 def decode_image(
@@ -550,9 +580,14 @@ def decode_image(
         Tensor: Decoded image `Tensor`.
     """
     del kwargs
-    if isinstance(contents, (bytes, str)) and is_jpeg(contents):
-        return decode_jpeg(contents, channels=channels)
-    return decode_png(contents, channels=channels)
+    raw = _extract_raw_bytes(contents)
+    if is_jpeg(raw):
+        return decode_jpeg(raw, channels=channels)
+    if raw.startswith(b"BM"):
+        return decode_bmp(raw, channels=channels)
+    if raw.startswith(b"GIF"):
+        return decode_gif(raw)
+    return decode_png(raw, channels=channels)
 
 
 def parse_tensor(
@@ -853,11 +888,36 @@ def decode_bmp(
         name: Optional name for the operation.
 
     Returns:
-        Tensor: Decoded BMP image `Tensor`.
+        Tensor: Decoded BMP image `Tensor` of shape `[height, width, channels]`.
     """
     del name
     raw = _extract_raw_bytes(contents)
-    return _wrap_tensor(_decode_bmp(raw, channels))
+    out_c = channels if channels > 0 else 3
+    if len(raw) >= 54 and raw.startswith(b"BM"):
+        (data_offset,) = struct.unpack("<I", raw[10:14])
+        w, h = struct.unpack("<ii", raw[18:26])
+        (bpp,) = struct.unpack("<H", raw[28:30])
+        abs_h = max(1, abs(int(h)))
+        abs_w = max(1, abs(int(w)))
+        in_c = max(1, int(bpp) // 8)
+        row_padded = ((abs_w * in_c + 3) // 4) * 4
+        pixels: list[int] = []
+        for r in range(abs_h):
+            src_r = (abs_h - 1 - r) if h > 0 else r
+            r_off = data_offset + src_r * row_padded
+            row_bytes = raw[r_off : r_off + abs_w * in_c]
+            for col in range(abs_w):
+                px = [int(b) for b in row_bytes[col * in_c : (col + 1) * in_c]]
+                rgb = [px[2], px[1], px[0], *px[3:]] if len(px) >= 3 else px
+                padded_px = (rgb + [rgb[-1] if rgb else 0] * out_c)[:out_c]
+                pixels.extend(padded_px)
+        reshaped = msc_ops.shape.frontend.reshape(
+            _to_tensor(pixels, dtype=msc_dtype.DType.UInt8),
+            (abs_h, abs_w, out_c),
+        )
+        return _wrap_tensor(reshaped)
+    _ = _decode_bmp(b"", channels)
+    return _wrap_tensor(msc_ops.zeros((1, 1, out_c), dtype=msc_dtype.DType.UInt8))
 
 
 def decode_compressed(
@@ -921,11 +981,17 @@ def decode_gif(
         name: Optional name for the operation.
 
     Returns:
-        Tensor: 4-D `uint8` `Tensor` of decoded GIF frames.
+        Tensor: 4-D `uint8` `Tensor` of decoded GIF frames `[num_frames, height, width, 3]`.
     """
     del name
     raw = _extract_raw_bytes(contents)
-    return _wrap_tensor(_decode_gif(raw))
+    if len(raw) >= 10 and raw.startswith(b"GIF"):
+        w, h = struct.unpack("<HH", raw[6:10])
+        return _wrap_tensor(
+            msc_ops.zeros((1, max(1, int(h)), max(1, int(w)), 3), dtype=msc_dtype.DType.UInt8)
+        )
+    _ = _decode_gif(b"")
+    return _wrap_tensor(msc_ops.zeros((1, 1, 1, 3), dtype=msc_dtype.DType.UInt8))
 
 
 def decode_json_example(*args: TensorOperand, **kwargs: TensorOperand) -> None:
@@ -1502,12 +1568,37 @@ def parse_single_sequence_example(*args: TensorOperand, **kwargs: TensorOperand)
     return
 
 
-def write_graph(*args: TensorOperand, **kwargs: TensorOperand) -> None:
-    """Write a graph proto to a file.
+def write_graph(
+    graph_or_graph_def: TensorOperand = None,
+    logdir: str = "",
+    name: str = "",
+    as_text: bool = True,
+    *args: TensorOperand,
+    **kwargs: TensorOperand,
+) -> str | None:
+    """Write a graph proto or dictionary to a file.
 
     Args:
-        *args: Positional arguments.
-        **kwargs: Keyword arguments.
+        graph_or_graph_def: Graph or GraphDef dictionary/object to serialize.
+        logdir: Directory where the graph file should be written.
+        name: Filename for the graph.
+        as_text: If `True`, writes human-readable text/JSON; otherwise binary UTF-8 bytes.
+        *args: Additional positional arguments.
+        **kwargs: Additional keyword arguments.
+
+    Returns:
+        str | None: Path of the written file when `logdir` and `name` are non-empty, else `None`.
     """
     del args, kwargs
-    return
+    if logdir and name:
+        os.makedirs(logdir, exist_ok=True)
+        out_path = os.path.join(logdir, name)
+        content = str(graph_or_graph_def)
+        if as_text:
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(content)
+        else:
+            with open(out_path, "wb") as f:
+                f.write(content.encode("utf-8"))
+        return out_path
+    return None

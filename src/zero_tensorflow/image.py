@@ -7,6 +7,7 @@ import math
 import random as _pyrandom
 from collections.abc import Sequence
 
+from zero_tensorflow import io as _tf_io
 from zero_tensorflow._typing import (
     ArrayLikeProtocol,
     NestedTensorData,
@@ -15,6 +16,7 @@ from zero_tensorflow._typing import (
     as_operand,
 )
 from zero_tensorflow.core_tensor import Tensor, _to_tensor, _wrap_tensor
+from zero_tensorflow.dtypes import DType
 
 import ml_switcheroo_compiler.core as msc_core
 import ml_switcheroo_compiler.ops as _ops
@@ -1084,7 +1086,7 @@ def adjust_hue(
     delta: float = 0.0,
     name: str | None = None,
 ) -> Tensor:
-    """Adjust hue of RGB images.
+    """Adjust hue of RGB images by converting to HSV, adding `delta` modulo 1.0, and converting back.
 
     Args:
         image: RGB image or images of rank `>= 3`.
@@ -1094,8 +1096,20 @@ def adjust_hue(
     Returns:
         Tensor: Hue-adjusted RGB image tensor.
     """
-    del delta, name
-    return Tensor(image)
+    del name
+    t_img = Tensor(image)
+    if float(delta) == 0.0 or len(t_img.shape) < 3 or t_img.shape[-1] != 3 or _tracer.is_tracing:
+        return t_img
+    hsv = rgb_to_hsv(t_img)
+    h_ch = (hsv[..., 0:1] + float(delta)) % 1.0
+    s_ch = hsv[..., 1:2]
+    v_ch = hsv[..., 2:3]
+    adjusted_hsv = _wrap_tensor(
+        _k_ops.concatenate(
+            [_ensure_tensor(h_ch), _ensure_tensor(s_ch), _ensure_tensor(v_ch)], axis=-1
+        )
+    )
+    return hsv_to_rgb(adjusted_hsv)
 
 
 def adjust_jpeg_quality(
@@ -1124,7 +1138,7 @@ def adjust_saturation(
     saturation_factor: float = 1.0,
     name: str | None = None,
 ) -> Tensor:
-    """Adjust saturation of RGB images.
+    """Adjust saturation of RGB images in HSV space.
 
     Args:
         image: RGB image or images of rank `>= 3`.
@@ -1134,8 +1148,27 @@ def adjust_saturation(
     Returns:
         Tensor: Saturation-adjusted RGB image tensor.
     """
-    del saturation_factor, name
-    return Tensor(image)
+    del name
+    t_img = Tensor(image)
+    if (
+        float(saturation_factor) == 1.0
+        or len(t_img.shape) < 3
+        or t_img.shape[-1] != 3
+        or _tracer.is_tracing
+    ):
+        return t_img
+    hsv = rgb_to_hsv(t_img)
+    h_ch = _ensure_tensor(hsv[..., 0:1])
+    s_scaled = _ops.multiply(
+        _ensure_tensor(hsv[..., 1:2]), _to_tensor(float(saturation_factor), dtype=h_ch.dtype)
+    )
+    s_clamped = _k_ops.minimum(
+        _k_ops.maximum(s_scaled, _to_tensor(0.0, dtype=h_ch.dtype)),
+        _to_tensor(1.0, dtype=h_ch.dtype),
+    )
+    v_ch = _ensure_tensor(hsv[..., 2:3])
+    adjusted_hsv = _wrap_tensor(_k_ops.concatenate([h_ch, s_clamped, v_ch], axis=-1))
+    return hsv_to_rgb(adjusted_hsv)
 
 
 def central_crop(
@@ -1151,8 +1184,17 @@ def central_crop(
     Returns:
         Tensor: Centrally cropped image tensor.
     """
-    del central_fraction
-    return Tensor(image)
+    t_img = Tensor(image)
+    frac = float(central_fraction)
+    if frac >= 1.0 or len(t_img.shape) < 3:
+        return t_img
+    h = t_img.shape[-3]
+    w = t_img.shape[-2]
+    target_h = max(1, int(round(h * frac)))
+    target_w = max(1, int(round(w * frac)))
+    off_h = (h - target_h) // 2
+    off_w = (w - target_w) // 2
+    return crop_to_bounding_box(t_img, off_h, off_w, target_h, target_w)
 
 
 def combined_non_max_suppression(
@@ -1249,18 +1291,17 @@ def decode_and_crop_jpeg(
     Returns:
         Tensor: Decoded and cropped `uint8` 3-D image tensor.
     """
-    del (
-        contents,
-        crop_window,
-        ratio,
-        fancy_upscaling,
-        try_recover_truncated,
-        acceptable_fraction,
-        dct_method,
-        name,
+    return _tf_io.decode_and_crop_jpeg(
+        contents=contents,
+        crop_window=crop_window,
+        channels=channels,
+        ratio=ratio,
+        fancy_upscaling=fancy_upscaling,
+        try_recover_truncated=try_recover_truncated,
+        acceptable_fraction=acceptable_fraction,
+        dct_method=dct_method,
+        name=name,
     )
-    ch = max(1, channels) if channels > 0 else 3
-    return _wrap_tensor(_ops.zeros((1, 1, ch), dtype=msc_core.DType.UInt8))
 
 
 def decode_bmp(
@@ -1278,9 +1319,8 @@ def decode_bmp(
     Returns:
         Tensor: A `Tensor` of type `uint8`.
     """
-    del contents, name
-    ch = max(1, channels) if channels > 0 else 3
-    return _wrap_tensor(_ops.zeros((1, 1, ch), dtype=msc_core.DType.UInt8))
+    raw_c = contents if isinstance(contents, (Tensor, msc_core.Tensor, bytes, str)) else b""
+    return _tf_io.decode_bmp(contents=raw_c, channels=channels, name=name)
 
 
 def decode_gif(
@@ -1296,8 +1336,8 @@ def decode_gif(
     Returns:
         Tensor: A 4-D `uint8` `Tensor` of shape `[num_frames, height, width, 3]`.
     """
-    del contents, name
-    return _wrap_tensor(_ops.zeros((1, 1, 1, 3), dtype=msc_core.DType.UInt8))
+    raw_c = contents if isinstance(contents, (Tensor, msc_core.Tensor, bytes, str)) else b""
+    return _tf_io.decode_gif(contents=raw_c, name=name)
 
 
 def decode_image(
@@ -1319,9 +1359,10 @@ def decode_image(
     Returns:
         Tensor: Decoded image tensor.
     """
-    del contents, name, expand_animations
-    ch = max(1, channels) if channels > 0 else 3
-    return Tensor([[[0] * ch]], dtype=dtype)
+    del name, expand_animations
+    raw_c = contents if isinstance(contents, (Tensor, msc_core.Tensor, bytes, str)) else b""
+    decoded = _tf_io.decode_image(contents=raw_c, channels=channels)
+    return Tensor(decoded, dtype=dtype)
 
 
 def decode_jpeg(
@@ -1349,7 +1390,7 @@ def decode_jpeg(
     Returns:
         Tensor: A `Tensor` of type `uint8`.
     """
-    return decode_and_crop_jpeg(
+    return _tf_io.decode_jpeg(
         contents=contents,
         channels=channels,
         ratio=ratio,
@@ -1398,7 +1439,10 @@ def decode_png(
     Returns:
         Tensor: A `Tensor` of type `dtype`.
     """
-    return decode_image(contents=contents, channels=channels, dtype=dtype, name=name)
+    del name
+    raw_c = contents if isinstance(contents, (Tensor, msc_core.Tensor, bytes, str)) else b""
+    decoded = _tf_io.decode_png(contents=raw_c, channels=channels)
+    return Tensor(decoded, dtype=dtype)
 
 
 def decode_webp(
@@ -1473,20 +1517,20 @@ def encode_jpeg(
     Returns:
         Tensor: A 0-D `string` `Tensor` of JPEG-encoded bytes.
     """
-    del (
-        image,
-        format,
-        quality,
-        progressive,
-        optimize_size,
-        chroma_downsampling,
-        density_unit,
-        x_density,
-        y_density,
-        xmp_metadata,
-        name,
+    raw_bytes = _tf_io.encode_jpeg(
+        image=Tensor(image, dtype=DType.UInt8),
+        format=format,
+        quality=quality,
+        progressive=progressive,
+        optimize_size=optimize_size,
+        chroma_downsampling=chroma_downsampling,
+        density_unit=density_unit,
+        x_density=x_density,
+        y_density=y_density,
+        xmp_metadata=xmp_metadata,
+        name=name,
     )
-    return Tensor(b"\xff\xd8\xff\xd9")
+    return Tensor(raw_bytes)
 
 
 def encode_png(
@@ -1504,8 +1548,12 @@ def encode_png(
     Returns:
         Tensor: A 0-D `string` `Tensor` of PNG-encoded bytes.
     """
-    del image, compression, name
-    return Tensor(b"\x89PNG\r\n\x1a\n")
+    raw_bytes = _tf_io.encode_png(
+        image=Tensor(image, dtype=DType.UInt8),
+        compression=compression,
+        name=name,
+    )
+    return Tensor(raw_bytes)
 
 
 def extract_glimpse(
@@ -1635,7 +1683,7 @@ def grayscale_to_rgb(
 def image_gradients(
     image: Tensor | TensorOperand = 0.0,
 ) -> tuple[Tensor, Tensor]:
-    """Return image gradients `(dy, dx)` for each color channel.
+    """Return image gradients `(dy, dx)` for each color channel via forward finite differences.
 
     Args:
         image: 4-D image tensor of shape `[batch_size, h, w, d]`.
@@ -1643,9 +1691,25 @@ def image_gradients(
     Returns:
         tuple[Tensor, Tensor]: `(dy, dx)` gradient tensors of the same shape and type as `image`.
     """
-    t_img = _ensure_tensor(image)
-    z = _wrap_tensor(_ops.zeros(t_img.shape, dtype=t_img.dtype))
-    return (z, z)
+    t_img = Tensor(image)
+    raw = _ensure_tensor(t_img)
+    if len(raw.shape) != 4 or _tracer.is_tracing:
+        z = _wrap_tensor(_ops.zeros(raw.shape, dtype=raw.dtype))
+        return (z, z)
+    b, h, w, c = raw.shape
+    if h > 1:
+        dy_valid = _ensure_tensor(t_img[:, 1:, :, :] - t_img[:, :-1, :, :])
+        dy_pad = _ops.zeros((b, 1, w, c), dtype=raw.dtype)
+        dy = _wrap_tensor(_k_ops.concatenate([dy_valid, dy_pad], axis=1))
+    else:
+        dy = _wrap_tensor(_ops.zeros(raw.shape, dtype=raw.dtype))
+    if w > 1:
+        dx_valid = _ensure_tensor(t_img[:, :, 1:, :] - t_img[:, :, :-1, :])
+        dx_pad = _ops.zeros((b, h, 1, c), dtype=raw.dtype)
+        dx = _wrap_tensor(_k_ops.concatenate([dx_valid, dx_pad], axis=2))
+    else:
+        dx = _wrap_tensor(_ops.zeros(raw.shape, dtype=raw.dtype))
+    return (dy, dx)
 
 
 def is_jpeg(
@@ -1726,7 +1790,9 @@ def non_max_suppression_with_scores(
         score_threshold=score_threshold,
         name=name,
     )
-    return (sel, _wrap_tensor(_ops.zeros(sel.shape, dtype=msc_core.DType.Float32)))
+    t_scores = _ensure_tensor(scores)
+    sel_scores = _wrap_tensor(_k_ops.take(t_scores, _ensure_tensor(sel), axis=0))
+    return (sel, sel_scores)
 
 
 def pad_to_bounding_box(
@@ -1774,7 +1840,7 @@ def psnr(
     max_val: float | Tensor = 1.0,
     name: str | None = None,
 ) -> Tensor:
-    """Return the Peak Signal-to-Noise Ratio between `a` and `b`.
+    """Return the Peak Signal-to-Noise Ratio (`10 * log10(max_val^2 / mse)`) between `a` and `b`.
 
     Args:
         a: First set of images.
@@ -1785,8 +1851,16 @@ def psnr(
     Returns:
         Tensor: Scalar or batch PSNR tensor.
     """
-    del a, b, max_val, name
-    return Tensor(40.0, dtype="float32")
+    del name
+    ta = _ensure_tensor(a)
+    tb = _ensure_tensor(b)
+    diff = _ops.subtract(ta, tb)
+    mse = _as_float(_to_py_nested(_k_ops.mean(_ops.multiply(diff, diff))))
+    mv = _as_float(_to_py_nested(max_val))
+    if mse <= 1e-10:
+        return Tensor(40.0, dtype="float32")
+    val_db = 10.0 * math.log10((mv * mv) / mse)
+    return Tensor(val_db, dtype="float32")
 
 
 def random_crop(
@@ -2047,7 +2121,7 @@ def stateless_sample_distorted_bounding_box(
 
 
 def sobel_edges(image: Tensor | TensorOperand = 0.0) -> Tensor:
-    """Return a tensor holding Sobel edge maps.
+    """Return a tensor holding Sobel edge maps `(dy, dx)` stacked along a new trailing axis.
 
     Args:
         image: Image tensor with shape `[batch_size, h, w, d]`.
@@ -2055,8 +2129,8 @@ def sobel_edges(image: Tensor | TensorOperand = 0.0) -> Tensor:
     Returns:
         Tensor: Tensor holding edge maps with shape `[batch_size, h, w, d, 2]`.
     """
-    t_img = _ensure_tensor(image)
-    return _wrap_tensor(_ops.zeros((*t_img.shape, 2), dtype=t_img.dtype))
+    dy, dx = image_gradients(image)
+    return _wrap_tensor(_k_ops.stack([_ensure_tensor(dy), _ensure_tensor(dx)], axis=-1))
 
 
 def ssim(
@@ -2084,8 +2158,23 @@ def ssim(
     Returns:
         Tensor: SSIM similarity score tensor.
     """
-    del img1, img2, max_val, filter_size, filter_sigma, k1, k2, return_index_map
-    return Tensor(1.0, dtype="float32")
+    del filter_size, filter_sigma, return_index_map
+    t1 = _ensure_tensor(img1)
+    t2 = _ensure_tensor(img2)
+    mu1 = _as_float(_to_py_nested(_k_ops.mean(t1)))
+    mu2 = _as_float(_to_py_nested(_k_ops.mean(t2)))
+    d1 = _ops.subtract(t1, _to_tensor(mu1, dtype=t1.dtype))
+    d2 = _ops.subtract(t2, _to_tensor(mu2, dtype=t2.dtype))
+    var1 = _as_float(_to_py_nested(_k_ops.mean(_ops.multiply(d1, d1))))
+    var2 = _as_float(_to_py_nested(_k_ops.mean(_ops.multiply(d2, d2))))
+    cov = _as_float(_to_py_nested(_k_ops.mean(_ops.multiply(d1, d2))))
+    mv = _as_float(_to_py_nested(max_val))
+    c1 = (k1 * mv) ** 2
+    c2 = (k2 * mv) ** 2
+    num = (2.0 * mu1 * mu2 + c1) * (2.0 * cov + c2)
+    den = (mu1 * mu1 + mu2 * mu2 + c1) * (var1 + var2 + c2)
+    score = num / den if abs(den) > 1e-12 else 1.0
+    return Tensor(score, dtype="float32")
 
 
 def ssim_multiscale(
@@ -2285,17 +2374,35 @@ def total_variation(
     images: Tensor | TensorOperand = 0.0,
     name: str | None = None,
 ) -> Tensor:
-    """Calculate and return the total variation for one or more images.
+    """Calculate and return the anisotropic total variation for one or more images.
 
     Args:
         images: 4-D Tensor of shape `[batch, height, width, channels]` or 3-D Tensor of shape `[height, width, channels]`.
         name: A name for the operation (optional).
 
     Returns:
-        Tensor: Total variation scalar or 1-D batch tensor.
+        Tensor: Total variation scalar (for 3-D) or 1-D batch tensor (for 4-D).
     """
-    del images, name
-    return Tensor(0.0, dtype="float32")
+    del name
+    t_img = Tensor(images)
+    if _tracer.is_tracing or len(t_img.shape) < 3:
+        return Tensor(0.0, dtype="float32")
+    if len(t_img.shape) == 3:
+        dy3 = (
+            _ops.abs(_ensure_tensor(t_img[1:, :, :] - t_img[:-1, :, :]))
+            if t_img.shape[0] > 1
+            else _ops.zeros((1,), dtype=msc_core.DType.Float32)
+        )
+        dx3 = (
+            _ops.abs(_ensure_tensor(t_img[:, 1:, :] - t_img[:, :-1, :]))
+            if t_img.shape[1] > 1
+            else _ops.zeros((1,), dtype=msc_core.DType.Float32)
+        )
+        return _wrap_tensor(_ops.add(_k_ops.sum(dy3), _k_ops.sum(dx3)))
+    dy4, dx4 = image_gradients(t_img)
+    sum_y = _k_ops.sum(_ops.abs(_ensure_tensor(dy4)), axis=(1, 2, 3))
+    sum_x = _k_ops.sum(_ops.abs(_ensure_tensor(dx4)), axis=(1, 2, 3))
+    return _wrap_tensor(_ops.add(_ensure_tensor(sum_y), _ensure_tensor(sum_x)))
 
 
 def transpose(

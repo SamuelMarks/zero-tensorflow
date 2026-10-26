@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import builtins
 import math
 import random as _pyrandom
+import time
 from collections.abc import Sequence
 
 from zero_tensorflow._typing import DTypeLike, ShapeLike, TensorOperand
-from zero_tensorflow.core_tensor import Tensor, _to_tensor, _wrap_tensor
+from zero_tensorflow.core_tensor import Tensor, Variable, _to_tensor, _wrap_tensor
+from zero_tensorflow.dtypes import DType
 
 import ml_switcheroo_compiler.core as msc_core
 import ml_switcheroo_compiler.ops as msc_ops
@@ -33,6 +36,7 @@ __all__ = [
     "stateless_gamma",
     "stateless_normal",
     "stateless_poisson",
+    "stateless_truncated_normal",
     "stateless_uniform",
     "truncated_normal",
     "uniform",
@@ -69,7 +73,7 @@ def set_seed(seed: int) -> None:
 
 
 class Generator:
-    """Random-number generator class."""
+    """Random-number generator class backed by a stateful `Variable`."""
 
     def __init__(self, seed: int | None = None) -> None:
         """Initialize the `Generator` instance.
@@ -78,15 +82,31 @@ class Generator:
             seed: Optional integer seed.
         """
         self._seed = seed
+        init_s = int(seed) if seed is not None else 0
+        self._state_var = Variable([init_s, 0], dtype=DType.Int64, trainable=False)
+
+    @property
+    def state(self) -> Variable:
+        """Return the internal RNG state `Variable`.
+
+        Returns:
+            Variable: 1-D `int64` state `Variable`.
+        """
+        return self._state_var
 
     def _next_seed(self) -> int:
-        """Advance generator state and return next step seed.
+        """Advance generator state `Variable` and return next step seed.
 
         Returns:
             int: Next step seed.
         """
         base = self._seed if self._seed is not None else 0
         self._seed = (base * 1664525 + 1013904223) & 0x7FFFFFFF
+        raw_st = self._state_var.tolist()
+        counter = (
+            (int(raw_st[1]) + 1) if isinstance(raw_st, builtins.list) and len(raw_st) >= 2 else 1
+        )
+        self._state_var.assign([self._seed, counter])
         return self._seed
 
     @classmethod
@@ -102,6 +122,67 @@ class Generator:
         """
         del alg
         return cls(seed=seed)
+
+    @classmethod
+    def from_non_deterministic_state(cls, alg: int | str | None = None) -> Generator:
+        """Create a `Generator` initialized with non-deterministic system entropy.
+
+        Args:
+            alg: Optional RNG algorithm identifier.
+
+        Returns:
+            Generator: A newly initialized `Generator` instance.
+        """
+        del alg
+        return cls(seed=int(time.time_ns() & 0x7FFFFFFF))
+
+    @classmethod
+    def from_key_counter(
+        cls,
+        key: int | Tensor | TensorOperand = 0,
+        counter: Sequence[int] | Tensor | TensorOperand = (0, 0),
+        alg: int | str | None = None,
+    ) -> Generator:
+        """Create a `Generator` from an explicit Philox/ThreeFry key and counter.
+
+        Args:
+            key: Scalar key value.
+            counter: Counter vector.
+            alg: Optional RNG algorithm identifier.
+
+        Returns:
+            Generator: Configured `Generator` instance.
+        """
+        del counter, alg
+        raw_k = key.tolist() if isinstance(key, Tensor) else key
+        k_int = int(raw_k) if isinstance(raw_k, (int, float)) else 0
+        return cls(seed=k_int)
+
+    def make_seeds(self, count: int = 1) -> Tensor:
+        """Generate `count` new `[2, count]` seed pairs and advance `self.state`.
+
+        Args:
+            count: Number of seed pairs to generate.
+
+        Returns:
+            Tensor: 2-D `int64` tensor of shape `[2, count]`.
+        """
+        c = max(1, int(count))
+        row0 = [self._next_seed() for _ in range(c)]
+        row1 = [self._next_seed() for _ in range(c)]
+        return Tensor([row0, row1], dtype=DType.Int64)
+
+    def split(self, count: int = 1) -> list[Generator]:
+        """Split this generator into `count` independent child `Generator`s.
+
+        Args:
+            count: Number of child generators to create.
+
+        Returns:
+            list[Generator]: List of `count` new `Generator` instances.
+        """
+        c = max(1, int(count))
+        return [Generator(seed=self._next_seed()) for _ in range(c)]
 
     def uniform(
         self,
@@ -129,6 +210,8 @@ class Generator:
         )
         return _wrap_tensor(res)
 
+    stateful_uniform = uniform
+
     def normal(
         self,
         shape: ShapeLike,
@@ -151,6 +234,58 @@ class Generator:
         """
         del name
         res: msc_core.Tensor = zk_random.normal(shape, mean, stddev, dtype, seed=self._next_seed())
+        return _wrap_tensor(res)
+
+    def truncated_normal(
+        self,
+        shape: ShapeLike,
+        mean: float = 0.0,
+        stddev: float = 1.0,
+        dtype: DTypeLike = None,
+        name: str | None = None,
+    ) -> Tensor:
+        """Output random values from a truncated normal distribution.
+
+        Args:
+            shape: A 1-D integer Tensor or Python sequence.
+            mean: Mean of the truncated normal distribution.
+            stddev: Standard deviation before truncation.
+            dtype: The type of the output.
+            name: Optional name for the operation.
+
+        Returns:
+            Tensor: Sampled truncated normal tensor.
+        """
+        del name
+        res: msc_core.Tensor = zk_random.truncated_normal(
+            shape, mean, stddev, dtype, seed=self._next_seed()
+        )
+        return _wrap_tensor(res)
+
+    def binomial(
+        self,
+        shape: ShapeLike,
+        counts: Tensor | TensorOperand = 1.0,
+        probs: Tensor | TensorOperand = 0.5,
+        dtype: DTypeLike = None,
+        name: str | None = None,
+    ) -> Tensor:
+        """Output random values from a binomial distribution.
+
+        Args:
+            shape: Output tensor shape.
+            counts: Number of trials parameter.
+            probs: Probability of success parameter.
+            dtype: Output data type.
+            name: Optional name for the operation.
+
+        Returns:
+            Tensor: Sampled binomial tensor.
+        """
+        del name
+        res: msc_core.Tensor = zk_random.binomial(
+            shape, counts, probs, dtype, seed=self._next_seed()
+        )
         return _wrap_tensor(res)
 
 
@@ -203,6 +338,34 @@ def stateless_normal(
     """
     del name
     res: msc_core.Tensor = zk_random.normal(shape, mean, stddev, dtype, seed=_extract_seed(seed))
+    return _wrap_tensor(res)
+
+
+def stateless_truncated_normal(
+    shape: ShapeLike,
+    seed: int | Sequence[int],
+    mean: float = 0.0,
+    stddev: float = 1.0,
+    dtype: DTypeLike = None,
+    name: str | None = None,
+) -> Tensor:
+    """Output deterministic random values from a truncated normal distribution.
+
+    Args:
+        shape: A 1-D integer Tensor or Python sequence.
+        seed: A shape `[2]` integer sequence or scalar seed.
+        mean: Mean of the truncated normal distribution.
+        stddev: Standard deviation before truncation.
+        dtype: The type of the output.
+        name: Optional name for the operation.
+
+    Returns:
+        Tensor: Sampled truncated normal tensor.
+    """
+    del name
+    res: msc_core.Tensor = zk_random.truncated_normal(
+        shape, mean, stddev, dtype, seed=_extract_seed(seed)
+    )
     return _wrap_tensor(res)
 
 

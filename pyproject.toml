@@ -50,7 +50,7 @@ exclude_lines = [
 
 [tool.mypy]
 python_version = "3.10"
-mypy_path = ["src", "../ml-switcheroo-ir/src", "../ml-switcheroo-compiler/src", "../ml-ecosystem-snapshots/src"]
+mypy_path = ["src"]
 files = ["src", "scripts", "tests"]
 strict = true
 disallow_any_explicit = true
@@ -89,6 +89,14 @@ section-order = ["future", "standard-library", "first-party", "third-party", "lo
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+[tool.pydoclint]
+style = "google"
+allow-init-docstring = true
+arg-type-hints-in-docstring = false
+check-return-types = false
+check-yield-types = false
+skip-checking-raises = true
+
 [tool.interrogate]
 ignore-init-method = false
 ignore-init-module = false
@@ -109,6 +117,4 @@ color = true
 allow-direct-references = true
 
 [tool.uv.sources]
-ml-switcheroo-compiler = { path = "../ml-switcheroo-compiler", editable = true }
-ml-switcheroo-ir = { path = "../ml-switcheroo-ir", editable = true }
 zero-keras = { path = "../zero-keras", editable = true }

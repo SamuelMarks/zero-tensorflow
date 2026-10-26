@@ -8,22 +8,20 @@ from types import TracebackType
 from typing import Protocol, runtime_checkable
 
 from zero_tensorflow._typing import (
-    ArrayLikeProtocol,
     DTypeLike,
-    NestedTensorData,
-    NumpyConvertibleProtocol,
     ScalarValue,
     TensorOperand,
     as_operand,
 )
-from zero_tensorflow.core_tensor import Tensor, Variable, _to_tensor, _wrap_tensor
+from zero_tensorflow.array_ops import _to_float, _to_int, _to_py_data
+from zero_tensorflow.core_tensor import Tensor, Variable, _to_tensor, _wrap_tensor, to_dtype
+from zero_tensorflow.dtypes import DType
 from zero_tensorflow.ragged import RaggedTensor
 from zero_tensorflow.sparse import SparseTensor
 
 import ml_switcheroo_compiler.core as msc_core
 import ml_switcheroo_compiler.ops as msc_ops
 from ml_switcheroo_compiler.core.config import config as _compiler_config
-from ml_switcheroo_compiler.core.shape import TensorOrScalar
 from ml_switcheroo_compiler.tracing.state import global_tracing_state as _tracer
 from ml_switcheroo_ir import LogicalEdge, LogicalGraph, LogicalNode
 from zero_keras import ops as _k_ops
@@ -53,48 +51,6 @@ class _ShapedProtocol(Protocol):
         Returns:
             tuple[int, ...]: Shape dimensions.
         """
-
-
-def _to_py_data(val: Tensor | TensorOperand | TensorOrScalar) -> NestedTensorData:
-    """Convert `val` into nested Python scalars/lists.
-
-    Args:
-        val: Input tensor or array-like operand.
-
-    Returns:
-        NestedTensorData: Python scalar or nested list.
-    """
-    if isinstance(val, NumpyConvertibleProtocol):
-        return _to_py_data(val.numpy())
-    if isinstance(val, ArrayLikeProtocol):
-        return val.tolist()
-    if isinstance(val, (list, tuple)):
-        return [_to_py_data(item) for item in val]
-    return val if isinstance(val, (int, float, bool, complex, str, bytes)) else None
-
-
-def _to_float(val: NestedTensorData) -> float:
-    """Convert a nested scalar element to `float`.
-
-    Args:
-        val: Scalar value.
-
-    Returns:
-        float: Converted float value.
-    """
-    return float(val) if isinstance(val, (int, float, bool)) else 0.0
-
-
-def _to_int(val: NestedTensorData) -> int:
-    """Convert a nested scalar element to `int`.
-
-    Args:
-        val: Scalar value.
-
-    Returns:
-        int: Converted integer value.
-    """
-    return int(val) if isinstance(val, (int, float, bool)) else 0
 
 
 def double(
@@ -412,21 +368,36 @@ def size(
     input: Tensor | TensorOperand,
     out_type: DTypeLike = None,
     name: str | None = None,
-) -> int:
-    """Return the total number of elements in `input`.
+) -> Tensor:
+    """Return a 0-D scalar `Tensor` representing the number of elements in `input`.
 
     Args:
         input: Input tensor or shaped object.
-        out_type: Optional output integer data type.
+        out_type: Optional output integer data type (defaults to `tf.int32`).
         name: Optional operation name.
 
     Returns:
-        int: Total number of elements in `input`, or `0` if unshaped.
+        Tensor: 0-D `Tensor` of type `out_type` containing the total element count.
     """
-    del out_type, name
-    if isinstance(input, _ShapedProtocol) and input.shape:
-        return int(math.prod(input.shape))
-    return 0
+    target_dt = to_dtype(out_type) if out_type is not None else DType.Int32
+    count = int(math.prod(input.shape)) if isinstance(input, _ShapedProtocol) and input.shape else 0
+    if _tracer.is_tracing and _tracer.active_graph is not None:
+        op_id = f"{name or 'Size'}_{len(_tracer.active_graph.nodes)}"
+        _tracer.active_graph.nodes[op_id] = LogicalNode(
+            id=op_id,
+            op_type="Size",
+            attributes={"out_type": target_dt.name, "value": count},
+            shape_metadata=(),
+        )
+    prev_tracing = _tracer.is_tracing
+    prev_eager = _compiler_config.eager_mode
+    _tracer.is_tracing = False
+    _compiler_config.eager_mode = True
+    try:
+        return Tensor(count, dtype=target_dt)
+    finally:
+        _tracer.is_tracing = prev_tracing
+        _compiler_config.eager_mode = prev_eager
 
 
 def space_to_batch_nd(
@@ -550,15 +521,4 @@ def space_to_batch(
     )
 
 
-def string(*args: Tensor | TensorOperand, **kwargs: TensorOperand) -> Tensor | TensorOperand | None:
-    """Convert or pass through a string tensor operand.
-
-    Args:
-        *args: Positional arguments.
-        **kwargs: Keyword arguments.
-
-    Returns:
-        Tensor | TensorOperand | None: First positional argument if provided, else None.
-    """
-    del kwargs
-    return args[0] if args else None
+string: DType = DType.String

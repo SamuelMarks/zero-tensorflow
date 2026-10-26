@@ -68,9 +68,12 @@ def test_summary(tmp_path: Path) -> None:
         assert summary.text("greeting", "hello") is True
         assert summary.audio("clip", [0.1, -0.1], sample_rate=16000) is True
         assert summary.write("custom_tag", tf.Variable(5.0)) is True
+        summary.trace_on()
+        assert summary.trace_export("my_trace") is True
+        summary.trace_off()
         summary.flush()
 
-    assert len(writer.events) == 5
+    assert len(writer.events) == 6
     writer.set_as_default(step=99)
     assert summary.scalar("acc", 0.95) is True
     summary.flush(writer)

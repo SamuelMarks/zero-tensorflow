@@ -79,6 +79,18 @@ def test_io_stubs(tmp_path: Path) -> None:
     assert crop_jpeg.shape == (2, 2, 3)
 
     assert isinstance(tf_io.decode_bmp(b""), tf.Tensor)
+    bmp_header = (
+        b"BM"
+        + b"\x3a\x00\x00\x00\x00\x00\x00\x00\x36\x00\x00\x00"
+        + b"\x28\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x01\x00\x18\x00"
+        + b"\x00" * 24
+        + b"\x1e\x14\x0a\x00"
+    )
+    tf.debugging.assert_equal(tf_io.decode_bmp(bmp_header), [[[10, 20, 30]]])
+    tf.debugging.assert_equal(tf_io.decode_image(bmp_header), [[[10, 20, 30]]])
+    gif_header = b"GIF89a\x02\x00\x03\x00\x00\x00\x00"
+    assert tf_io.decode_gif(gif_header).shape == (1, 3, 2, 3)
+    assert tf_io.decode_image(gif_header).shape == (1, 3, 2, 3)
     assert isinstance(tf_io.decode_gif(b""), tf.Tensor)
     assert isinstance(tf_io.decode_image(b""), tf.Tensor)
 
@@ -109,4 +121,10 @@ def test_io_stubs(tmp_path: Path) -> None:
     matched_once = tf_io.match_filenames_once(str(tmp_path / "*.txt"))
     assert matched_once is not None
 
-    tf_io.write_graph({"nodes": []}, str(tmp_path), "graph.pbtxt")
+    written_txt = tf_io.write_graph({"nodes": []}, str(tmp_path), "graph.pbtxt", as_text=True)
+    assert written_txt is not None
+    assert (tmp_path / "graph.pbtxt").is_file()
+    written_bin = tf_io.write_graph({"nodes": []}, str(tmp_path), "graph.pb", as_text=False)
+    assert written_bin is not None
+    assert (tmp_path / "graph.pb").is_file()
+    assert tf_io.write_graph({"nodes": []}) is None

@@ -5,6 +5,7 @@ from __future__ import annotations
 import bisect
 import builtins
 import hashlib
+import itertools
 import math
 from collections.abc import Mapping, Sequence
 
@@ -24,7 +25,20 @@ from zero_tensorflow.core_tensor import (
     _wrap_tensor,
     to_dtype,
 )
-from zero_tensorflow.dtypes import DType
+from zero_tensorflow.dtypes import (
+    DType,
+    half,
+    qint8,
+    qint16,
+    qint32,
+    quint8,
+    quint16,
+    resource,
+    uint16,
+    uint32,
+    uint64,
+    variant,
+)
 from zero_tensorflow.linalg_ops import linalg
 from zero_tensorflow.sparse import SparseTensor
 from zero_tensorflow.spec_types import TensorShape
@@ -276,11 +290,23 @@ def searchsorted(
     del name
     if sorted_sequence is None or values is None:
         return None
-    seq_flat = _flatten_floats(_to_py_data(sorted_sequence))
-    val_flat = _flatten_floats(_to_py_data(values))
-    bisect_fn = bisect.bisect_right if side.lower() == "right" else bisect.bisect_left
-    indices = [bisect_fn(seq_flat, v) for v in val_flat]
+    t_seq = _to_tensor(sorted_sequence)
     t_vals = _to_tensor(values)
+    seq_flat = _flatten_floats(_to_py_data(t_seq))
+    val_flat = _flatten_floats(_to_py_data(t_vals))
+    bisect_fn = bisect.bisect_right if side.lower() == "right" else bisect.bisect_left
+    seq_len = max(1, t_seq.shape[-1]) if t_seq.shape else max(1, len(seq_flat))
+    val_len = max(1, t_vals.shape[-1]) if t_vals.shape else max(1, len(val_flat))
+    seq_rows = [seq_flat[i : i + seq_len] for i in builtins.range(0, len(seq_flat), seq_len)] or [
+        []
+    ]
+    val_rows = [val_flat[i : i + val_len] for i in builtins.range(0, len(val_flat), val_len)] or [
+        []
+    ]
+    indices: builtins.list[int] = []
+    for row_idx, v_row in enumerate(val_rows):
+        s_row = seq_rows[min(row_idx, len(seq_rows) - 1)]
+        indices.extend(bisect_fn(s_row, v) for v in v_row)
     target_dtype = to_dtype(out_type) if out_type is not None else DType.Int32
     res_t = _to_tensor(indices, dtype=target_dtype)
     if t_vals.shape:
@@ -528,15 +554,31 @@ def boolean_mask(
     Returns:
         Tensor | None: Masked `Tensor`, or `None` if `tensor is None`.
     """
-    del axis, name
+    del name
     if tensor is None:
         return None
     t_in = _to_tensor(tensor)
     if mask is None:
         return _wrap_tensor(t_in)
+    t_mask = _to_tensor(mask)
     if _tracer.is_tracing or not _compiler_config.eager_mode:
-        return _wrap_tensor(as_operand(_ops.boolean_mask(t_in, _to_tensor(mask))))
-    return _wrap_tensor(t_in)[_wrap_tensor(mask)]
+        return _wrap_tensor(as_operand(_ops.boolean_mask(t_in, t_mask)))
+    eff_axis = 0 if axis is None else (axis if axis >= 0 else max(0, len(t_in.shape) + axis))
+    if eff_axis == 0:
+        return _wrap_tensor(t_in)[_wrap_tensor(t_mask)]
+    k_rank = max(1, len(t_mask.shape))
+    flat_mask = [v != 0.0 for v in _flatten_floats(_to_py_data(t_mask))]
+    true_indices = [i for i, flag in enumerate(flat_mask) if flag]
+    lead_shape = t_in.shape[:eff_axis]
+    masked_shape = t_in.shape[eff_axis : eff_axis + k_rank]
+    trail_shape = t_in.shape[eff_axis + k_rank :]
+    collapsed_dim = int(math.prod(masked_shape)) if masked_shape else 1
+    reshaped = _to_tensor(_k_ops.reshape(t_in, (*lead_shape, collapsed_dim, *trail_shape)))
+    if not true_indices:
+        return _wrap_tensor(_ops.zeros((*lead_shape, 0, *trail_shape), dtype=t_in.dtype))
+    return _wrap_tensor(
+        _k_ops.take(reshaped, _to_tensor(true_indices, dtype=DType.Int32), axis=eff_axis)
+    )
 
 
 def broadcast_dynamic_shape(
@@ -656,17 +698,16 @@ def clip_by_norm(
     Returns:
         Tensor | None: L2-norm clipped `Tensor`, or `None` if `t is None`.
     """
-    del axes, name
+    del name
     if t is None:
         return None
     t_in = _to_tensor(t)
-    max_norm = _to_float(_to_py_data(clip_norm))
-    vals = _flatten_floats(_to_py_data(t_in))
-    l2 = math.sqrt(sum(v * v for v in vals))
-    if l2 > max_norm and l2 > 0.0:
-        scale = max_norm / l2
-        return _wrap_tensor(_ops.multiply(t_in, _to_tensor(scale, dtype=t_in.dtype)))
-    return _wrap_tensor(t_in)
+    c_norm = _to_tensor(clip_norm, dtype=t_in.dtype)
+    l2_sq = _to_tensor(_k_ops.sum(_ops.square(t_in), axis=axes, keepdims=True))
+    l2 = _ops.sqrt(l2_sq)
+    safe_l2 = _ops.maximum(l2, _to_tensor(1e-12, dtype=t_in.dtype))
+    scale = _ops.minimum(_ops.divide(c_norm, safe_l2), _to_tensor(1.0, dtype=t_in.dtype))
+    return _wrap_tensor(_ops.multiply(t_in, scale))
 
 
 def clip_by_global_norm(
@@ -689,24 +730,22 @@ def clip_by_global_norm(
     del name
     if t_list is None or not isinstance(t_list, Sequence) or isinstance(t_list, (str, bytes)):
         return None
-    tensors = [_wrap_tensor(_to_tensor(item)) for item in t_list]
+    tensors = [_to_tensor(item) for item in t_list]
     if use_norm is not None:
-        g_norm = _to_float(_to_py_data(use_norm))
+        g_norm_t = _to_tensor(use_norm)
+    elif tensors:
+        sq_sums = [_to_tensor(_k_ops.sum(_ops.square(item_t))) for item_t in tensors]
+        total_sq = sq_sums[0]
+        for s_term in sq_sums[1:]:
+            total_sq = _ops.add(total_sq, s_term)
+        g_norm_t = _ops.sqrt(total_sq)
     else:
-        sq_sum = 0.0
-        for item_t in tensors:
-            for v in _flatten_floats(_to_py_data(item_t)):
-                sq_sum += v * v
-        g_norm = math.sqrt(sq_sum)
-    max_norm = _to_float(_to_py_data(clip_norm))
-    scale = (max_norm / g_norm) if (g_norm > max_norm and g_norm > 0.0) else 1.0
-    clipped = [
-        _wrap_tensor(_ops.multiply(_to_tensor(item_t), _to_tensor(scale)))
-        if scale != 1.0
-        else item_t
-        for item_t in tensors
-    ]
-    return (clipped, Tensor(g_norm, dtype=DType.Float32))
+        g_norm_t = _to_tensor(0.0, dtype=DType.Float32)
+    c_norm_t = _to_tensor(clip_norm, dtype=g_norm_t.dtype)
+    safe_g = _ops.maximum(g_norm_t, _to_tensor(1e-12, dtype=g_norm_t.dtype))
+    scale = _ops.minimum(_ops.divide(c_norm_t, safe_g), _to_tensor(1.0, dtype=g_norm_t.dtype))
+    clipped = [_wrap_tensor(_ops.multiply(item_t, scale)) for item_t in tensors]
+    return (clipped, _wrap_tensor(g_norm_t))
 
 
 def complex(
@@ -978,7 +1017,7 @@ def conv2d_backprop_filter_v2(
     if target_f is None:
         return None
     f_shape = builtins.tuple(_flatten_ints(_to_py_data(target_f)))
-    return _wrap_tensor(_ops.zeros(f_shape, dtype=DType.Float32))
+    return _wrap_tensor(_ops.zeros(f_shape, dtype=DType.Float32.as_compiler_dtype))
 
 
 def conv2d_backprop_input_v2(
@@ -1030,7 +1069,7 @@ def conv2d_backprop_input_v2(
     if target_in is None:
         return None
     in_shape = builtins.tuple(_flatten_ints(_to_py_data(target_in)))
-    return _wrap_tensor(_ops.zeros(in_shape, dtype=DType.Float32))
+    return _wrap_tensor(_ops.zeros(in_shape, dtype=DType.Float32.as_compiler_dtype))
 
 
 def cumsum(
@@ -1082,14 +1121,25 @@ def dynamic_partition(
     if data is None or partitions is None:
         return None
     t_data = _to_tensor(data)
+    t_parts = _to_tensor(partitions)
     n_parts = max(1, int(num_partitions))
-    vals = _flatten_floats(_to_py_data(t_data))
-    parts = _flatten_ints(_to_py_data(partitions))
-    buckets: builtins.list[builtins.list[float]] = [[] for _ in range(n_parts)]
-    for val, p_idx in zip(vals, parts):
-        if 0 <= p_idx < n_parts:
-            buckets[p_idx].append(val)
-    return [Tensor(b, dtype=t_data.dtype) for b in buckets]
+    p_ndim = max(1, len(t_parts.shape))
+    inner_shape = t_data.shape[p_ndim:] if len(t_data.shape) >= p_ndim else ()
+    num_slices = int(math.prod(t_data.shape[:p_ndim])) if t_data.shape[:p_ndim] else 1
+    reshaped = _to_tensor(_k_ops.reshape(t_data, (num_slices, *inner_shape)))
+    parts = _flatten_ints(_to_py_data(t_parts))
+    out: builtins.list[Tensor] = []
+    for p_idx in builtins.range(n_parts):
+        indices_p = [idx for idx, pid in enumerate(parts[:num_slices]) if pid == p_idx]
+        if indices_p:
+            out.append(
+                _wrap_tensor(
+                    _k_ops.take(reshaped, _to_tensor(indices_p, dtype=DType.Int32), axis=0)
+                )
+            )
+        else:
+            out.append(_wrap_tensor(_ops.zeros((0, *inner_shape), dtype=t_data.dtype)))
+    return out
 
 
 def dynamic_stitch(
@@ -1110,16 +1160,72 @@ def dynamic_stitch(
     del name
     if indices is None or data is None:
         return None
-    idx_flat = _flatten_ints(_to_py_data(indices))
-    dat_flat = _flatten_floats(_to_py_data(data))
-    if not idx_flat:
-        return Tensor([], dtype=DType.Float32)
-    out_len = max(idx_flat) + 1
-    merged = [0.0] * out_len
-    for idx_val, dat_val in zip(idx_flat, dat_flat):
-        if 0 <= idx_val < out_len:
-            merged[idx_val] = dat_val
-    return Tensor(merged, dtype=DType.Float32)
+    idx_seq = (
+        indices
+        if isinstance(indices, Sequence) and not isinstance(indices, (str, bytes))
+        else [indices]
+    )
+    dat_seq = data if isinstance(data, Sequence) and not isinstance(data, (str, bytes)) else [data]
+    slice_map: dict[int, msc_core.Tensor] = {}
+    slice_shape: builtins.tuple[int, ...] = ()
+    first_dtype = DType.Float32.as_compiler_dtype
+    max_idx = -1
+    for ind_item, dat_item in zip(idx_seq, dat_seq):
+        t_ind = _to_tensor(ind_item)
+        t_dat = _to_tensor(dat_item)
+        first_dtype = t_dat.dtype
+        ind_rank = len(t_ind.shape)
+        slice_shape = t_dat.shape[ind_rank:] if len(t_dat.shape) >= ind_rank else ()
+        flat_inds = _flatten_ints(_to_py_data(t_ind))
+        num_k = len(flat_inds)
+        if num_k > 0:
+            reshaped_dat = _to_tensor(_k_ops.reshape(t_dat, (num_k, *slice_shape)))
+            for k_i, target_pos in enumerate(flat_inds):
+                if target_pos >= 0:
+                    slice_map[target_pos] = _to_tensor(_k_ops.take(reshaped_dat, k_i, axis=0))
+                    if target_pos > max_idx:
+                        max_idx = target_pos
+    if max_idx < 0:
+        return _wrap_tensor(_ops.zeros((0, *slice_shape), dtype=first_dtype))
+    zero_slice = _ops.zeros(slice_shape, dtype=first_dtype)
+    rows = [slice_map.get(pos, zero_slice) for pos in builtins.range(max_idx + 1)]
+    return _wrap_tensor(_k_ops.stack(rows, axis=0))
+
+
+def _extract_edit_sequences(
+    inp: SparseTensor | Tensor | TensorOperand,
+) -> builtins.tuple[builtins.tuple[int, ...], dict[builtins.tuple[int, ...], builtins.list[int]]]:
+    """Extract per-batch token sequences and batch shape from a `SparseTensor` or dense `Tensor`.
+
+    Args:
+        inp: Input `SparseTensor` or dense `Tensor`.
+
+    Returns:
+        tuple[tuple[int, ...], dict[tuple[int, ...], list[int]]]: `(batch_shape, sequences_by_coord)`.
+    """
+    if isinstance(inp, SparseTensor):
+        d_shape = builtins.tuple(_flatten_ints(_to_py_data(inp.dense_shape)))
+        batch_shape = d_shape[:-1] if len(d_shape) >= 2 else (1,)
+        rank_sp = max(2, len(d_shape))
+        idx_flat = _flatten_ints(_to_py_data(inp.indices))
+        val_flat = _flatten_ints(_to_py_data(inp.values))
+        grouped: dict[builtins.tuple[int, ...], builtins.list[builtins.tuple[int, int]]] = {}
+        for k, val_tok in enumerate(val_flat):
+            coord = builtins.tuple(idx_flat[k * rank_sp : (k + 1) * rank_sp])
+            b_key = coord[:-1] if len(d_shape) >= 2 and len(coord) >= 2 else (0,)
+            t_pos = coord[-1] if coord else k
+            grouped.setdefault(b_key, []).append((t_pos, val_tok))
+        return (batch_shape, {bk: [v for _, v in sorted(items)] for bk, items in grouped.items()})
+
+    t_in = _to_tensor(inp)
+    d_shape_dense = t_in.shape
+    batch_shape_d = d_shape_dense[:-1] if len(d_shape_dense) >= 2 else (1,)
+    seq_len = d_shape_dense[-1] if d_shape_dense else 1
+    val_flat_d = _flatten_ints(_to_py_data(t_in))
+    seqs_dense: dict[builtins.tuple[int, ...], builtins.list[int]] = {}
+    for b_idx, b_coord in enumerate(itertools.product(*(builtins.range(d) for d in batch_shape_d))):
+        seqs_dense[b_coord] = val_flat_d[b_idx * seq_len : (b_idx + 1) * seq_len]
+    return (batch_shape_d, seqs_dense)
 
 
 def edit_distance(
@@ -1142,24 +1248,31 @@ def edit_distance(
     del name
     if hypothesis is None or truth is None:
         return None
-    t_hyp = _to_tensor(hypothesis.values if isinstance(hypothesis, SparseTensor) else hypothesis)
-    t_tr = _to_tensor(truth.values if isinstance(truth, SparseTensor) else truth)
-    seq_a = _flatten_ints(_to_py_data(t_hyp))
-    seq_b = _flatten_ints(_to_py_data(t_tr))
-    m, n = len(seq_a), len(seq_b)
-    dp = [[0] * (n + 1) for _ in range(m + 1)]
-    for i in range(m + 1):
-        dp[i][0] = i
-    for j in range(n + 1):
-        dp[0][j] = j
-    for i in range(1, m + 1):
-        for j in range(1, n + 1):
-            cost = 0 if seq_a[i - 1] == seq_b[j - 1] else 1
-            dp[i][j] = min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
-    dist = float(dp[m][n])
-    if normalize and n > 0:
-        dist /= float(n)
-    return Tensor([dist], dtype=DType.Float32)
+    hyp_batch, hyp_seqs = _extract_edit_sequences(hypothesis)
+    tr_batch, tr_seqs = _extract_edit_sequences(truth)
+    max_b_rank = max(len(hyp_batch), len(tr_batch))
+    pad_h = (1,) * (max_b_rank - len(hyp_batch)) + hyp_batch
+    pad_t = (1,) * (max_b_rank - len(tr_batch)) + tr_batch
+    out_batch = builtins.tuple(max(dh, dt) for dh, dt in zip(pad_h, pad_t))
+    distances: builtins.list[float] = []
+    for b_coord in itertools.product(*(builtins.range(d) for d in out_batch)):
+        seq_a = hyp_seqs.get(b_coord, [])
+        seq_b = tr_seqs.get(b_coord, [])
+        m, n = len(seq_a), len(seq_b)
+        dp = [[0] * (n + 1) for _ in builtins.range(m + 1)]
+        for i in builtins.range(m + 1):
+            dp[i][0] = i
+        for j in builtins.range(n + 1):
+            dp[0][j] = j
+        for i in builtins.range(1, m + 1):
+            for j in builtins.range(1, n + 1):
+                cost = 0 if seq_a[i - 1] == seq_b[j - 1] else 1
+                dp[i][j] = min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
+        dist = float(dp[m][n])
+        if normalize and n > 0:
+            dist /= float(n)
+        distances.append(dist)
+    return _wrap_tensor(_k_ops.reshape(_to_tensor(distances, dtype=DType.Float32), out_batch))
 
 
 def eig(
@@ -1207,14 +1320,14 @@ def eigvals(
 
 def ensure_shape(
     x: Tensor | TensorOperand = None,
-    shape: TensorShape | Sequence[int | None] | None = None,
+    shape: TensorShape | Sequence[int | None] | Tensor | None = None,
     name: str | None = None,
 ) -> Tensor | None:
     """Update the shape of a tensor and check at runtime that the shape holds.
 
     Args:
         x: Input `Tensor`.
-        shape: Expected `TensorShape` or sequence of dimension sizes (`None` for dynamic).
+        shape: Expected `TensorShape`, `Tensor`, or sequence of dimension sizes (`None` for dynamic).
         name: Optional operation name.
 
     Returns:
@@ -1228,9 +1341,18 @@ def ensure_shape(
         return None
     t_x = _wrap_tensor(_to_tensor(x))
     if shape is not None:
-        expected = shape if isinstance(shape, TensorShape) else TensorShape(shape)
+        if isinstance(shape, Tensor):
+            expected = TensorShape(
+                [d if d >= 0 else None for d in _flatten_ints(_to_py_data(shape))]
+            )
+        elif isinstance(shape, TensorShape):
+            expected = shape
+        else:
+            expected = TensorShape(shape)
         if not expected.is_compatible_with(t_x.shape):
             raise ValueError(f"Shape of tensor {t_x.shape} is not compatible with {expected}.")
+        merged = expected.merge_with(t_x.shape)
+        t_x.set_shape(merged.as_list())
     return t_x
 
 
@@ -1253,10 +1375,63 @@ def extract_volume_patches(
     Returns:
         Tensor | None: Extracted volume patches `Tensor`, or `None` if `input is None`.
     """
-    del ksizes, strides, padding, name
+    del name
     if input is None:
         return None
-    return _wrap_tensor(_to_tensor(input))
+    t_in = _to_tensor(input)
+    if ksizes is None or strides is None or len(t_in.shape) != 5:
+        return _wrap_tensor(t_in)
+    k_list = _flatten_ints(_to_py_data(ksizes))
+    s_list = _flatten_ints(_to_py_data(strides))
+    kd = max(1, k_list[1] if len(k_list) >= 4 else k_list[0])
+    kh = max(1, k_list[2] if len(k_list) >= 4 else k_list[0])
+    kw = max(1, k_list[3] if len(k_list) >= 4 else k_list[0])
+    sd = max(1, s_list[1] if len(s_list) >= 4 else s_list[0])
+    sh = max(1, s_list[2] if len(s_list) >= 4 else s_list[0])
+    sw = max(1, s_list[3] if len(s_list) >= 4 else s_list[0])
+    b_sz, in_d, in_h, in_w, ch = t_in.shape
+    cur = t_in
+    if padding.upper() == "SAME":
+        out_d = math.ceil(in_d / sd)
+        out_h = math.ceil(in_h / sh)
+        out_w = math.ceil(in_w / sw)
+        pad_d = max(0, (out_d - 1) * sd + kd - in_d)
+        pad_h = max(0, (out_h - 1) * sh + kh - in_h)
+        pad_w = max(0, (out_w - 1) * sw + kw - in_w)
+        p_spec = [
+            [0, 0],
+            [pad_d // 2, pad_d - pad_d // 2],
+            [pad_h // 2, pad_h - pad_h // 2],
+            [pad_w // 2, pad_w - pad_w // 2],
+            [0, 0],
+        ]
+        cur = _to_tensor(_k_ops.pad(cur, p_spec))
+    else:
+        out_d = max(0, (in_d - kd) // sd + 1)
+        out_h = max(0, (in_h - kh) // sh + 1)
+        out_w = max(0, (in_w - kw) // sw + 1)
+
+    if out_d <= 0 or out_h <= 0 or out_w <= 0:
+        return _wrap_tensor(
+            _ops.zeros(
+                (b_sz, max(0, out_d), max(0, out_h), max(0, out_w), kd * kh * kw * ch),
+                dtype=t_in.dtype,
+            )
+        )
+
+    patches: builtins.list[msc_core.Tensor] = []
+    for di in range(out_d):
+        d0 = di * sd
+        s_d = _to_tensor(_k_ops.slice(cur, 1, d0, d0 + kd, 1))
+        for hi in range(out_h):
+            h0 = hi * sh
+            s_h = _to_tensor(_k_ops.slice(s_d, 2, h0, h0 + kh, 1))
+            for wi in range(out_w):
+                w0 = wi * sw
+                s_w = _to_tensor(_k_ops.slice(s_h, 3, w0, w0 + kw, 1))
+                patches.append(_to_tensor(_k_ops.reshape(s_w, (b_sz, 1, kd * kh * kw * ch))))
+    stacked = _to_tensor(_k_ops.concatenate(patches, axis=1))
+    return _wrap_tensor(_k_ops.reshape(stacked, (b_sz, out_d, out_h, out_w, kd * kh * kw * ch)))
 
 
 def fftnd(
@@ -1571,7 +1746,7 @@ def one_hot(
     Returns:
         Tensor | None: One-hot `Tensor`, or `None` if `indices is None`.
     """
-    del axis, name
+    del name
     if indices is None:
         return None
     t_idx = _to_tensor(indices)
@@ -1579,11 +1754,17 @@ def one_hot(
     on_f = float(on_value) if isinstance(on_value, (int, float, bool)) else 1.0
     off_f = float(off_value) if isinstance(off_value, (int, float, bool)) else 0.0
     flat_idx = _flatten_ints(_to_py_data(t_idx))
-    rows = [[on_f if col == idx else off_f for col in range(d)] for idx in flat_idx]
+    rows = [[on_f if (idx >= 0 and col == idx) else off_f for col in range(d)] for idx in flat_idx]
     target_dtype = to_dtype(dtype) if dtype is not None else DType.Float32
     res_t = _to_tensor(rows, dtype=target_dtype)
     out_shape = (*t_idx.shape, d)
-    return _wrap_tensor(_k_ops.reshape(res_t, out_shape))
+    reshaped = _to_tensor(_k_ops.reshape(res_t, out_shape))
+    if axis != -1 and axis != len(t_idx.shape):
+        rank_out = len(out_shape)
+        norm_ax = max(0, min(rank_out - 2, axis if axis >= 0 else rank_out + axis))
+        perm = [*range(norm_ax), rank_out - 1, *range(norm_ax, rank_out - 1)]
+        reshaped = _to_tensor(_k_ops.transpose(reshaped, perm))
+    return _wrap_tensor(reshaped)
 
 
 def pad(
@@ -1609,9 +1790,25 @@ def pad(
     Returns:
         Tensor | Sequence[Tensor | TensorOperand] | TensorOperand: Padded `Tensor`.
     """
-    del mode, constant_values, name
-    pos = [a for a in (tensor, paddings, *args) if a is not None]
-    return _wrap(_k_ops.pad(*[_to_tensor(a) for a in pos], **kwargs))
+    del name
+    m_str = str(mode).lower()
+    if _tracer.is_tracing or not _compiler_config.eager_mode:
+        pos = [a for a in (tensor, paddings, *args) if a is not None]
+        return _wrap(_k_ops.pad(*[_to_tensor(a) for a in pos], mode=m_str, **kwargs))
+    t_in = _to_tensor(tensor if tensor is not None else 0.0)
+    py_pads = _to_py_data(paddings)
+    pad_pairs = (
+        [
+            [_to_int(p[0]), _to_int(p[1])]
+            for p in py_pads
+            if isinstance(p, builtins.list) and len(p) >= 2
+        ]
+        if isinstance(py_pads, builtins.list)
+        else []
+    )
+    pad_arg = pad_pairs if pad_pairs else _to_tensor(paddings if paddings is not None else [[0, 0]])
+    c_val = constant_values if m_str == "constant" else None
+    return _wrap(_k_ops.pad(t_in, pad_arg, mode=m_str, constant_values=c_val, **kwargs))
 
 
 def parallel_stack(
@@ -1633,172 +1830,6 @@ def parallel_stack(
     if isinstance(values, Sequence) and not isinstance(values, (str, bytes)) and values:
         return _wrap_tensor(_k_ops.stack([_to_tensor(v) for v in values], axis=0))
     return _wrap_tensor(_to_tensor(values))
-
-
-def _cast_or_none(
-    target_dtype: DType,
-    *args: Tensor | TensorOperand,
-    **kwargs: Tensor | TensorOperand,
-) -> Tensor | None:
-    """Cast `args[0]` to `target_dtype` if provided, else return `None`.
-
-    Args:
-        target_dtype: Target `DType`.
-        *args: Positional arguments.
-        **kwargs: Unused keyword arguments.
-
-    Returns:
-        Tensor | None: Cast `Tensor`, or `None` if `args` is empty.
-    """
-    del kwargs
-    if not args or args[0] is None:
-        return None
-    return _wrap_tensor(_ops.cast(_to_tensor(args[0]), target_dtype))
-
-
-def half(*args: Tensor | TensorOperand, **kwargs: Tensor | TensorOperand) -> Tensor | None:
-    """Cast input to 16-bit half-precision floating-point (`float16`).
-
-    Args:
-        *args: Positional operation arguments.
-        **kwargs: Keyword operation arguments.
-
-    Returns:
-        Tensor | None: Cast `Tensor` or `None`.
-    """
-    return _cast_or_none(DType.Float16, *args, **kwargs)
-
-
-def qint8(*args: Tensor | TensorOperand, **kwargs: Tensor | TensorOperand) -> Tensor | None:
-    """Cast input to quantized signed 8-bit integer (`qint8`).
-
-    Args:
-        *args: Positional operation arguments.
-        **kwargs: Keyword operation arguments.
-
-    Returns:
-        Tensor | None: Cast `Tensor` or `None`.
-    """
-    return _cast_or_none(DType.Int8, *args, **kwargs)
-
-
-def qint16(*args: Tensor | TensorOperand, **kwargs: Tensor | TensorOperand) -> Tensor | None:
-    """Cast input to quantized signed 16-bit integer (`qint16`).
-
-    Args:
-        *args: Positional operation arguments.
-        **kwargs: Keyword operation arguments.
-
-    Returns:
-        Tensor | None: Cast `Tensor` or `None`.
-    """
-    return _cast_or_none(DType.Int16, *args, **kwargs)
-
-
-def qint32(*args: Tensor | TensorOperand, **kwargs: Tensor | TensorOperand) -> Tensor | None:
-    """Cast input to quantized signed 32-bit integer (`qint32`).
-
-    Args:
-        *args: Positional operation arguments.
-        **kwargs: Keyword operation arguments.
-
-    Returns:
-        Tensor | None: Cast `Tensor` or `None`.
-    """
-    return _cast_or_none(DType.Int32, *args, **kwargs)
-
-
-def quint8(*args: Tensor | TensorOperand, **kwargs: Tensor | TensorOperand) -> Tensor | None:
-    """Cast input to quantized unsigned 8-bit integer (`quint8`).
-
-    Args:
-        *args: Positional operation arguments.
-        **kwargs: Keyword operation arguments.
-
-    Returns:
-        Tensor | None: Cast `Tensor` or `None`.
-    """
-    return _cast_or_none(DType.UInt8, *args, **kwargs)
-
-
-def quint16(*args: Tensor | TensorOperand, **kwargs: Tensor | TensorOperand) -> Tensor | None:
-    """Cast input to quantized unsigned 16-bit integer (`quint16`).
-
-    Args:
-        *args: Positional operation arguments.
-        **kwargs: Keyword operation arguments.
-
-    Returns:
-        Tensor | None: Cast `Tensor` or `None`.
-    """
-    return _cast_or_none(DType.UInt16, *args, **kwargs)
-
-
-def uint16(*args: Tensor | TensorOperand, **kwargs: Tensor | TensorOperand) -> Tensor | None:
-    """Cast input to unsigned 16-bit integer (`uint16`).
-
-    Args:
-        *args: Positional operation arguments.
-        **kwargs: Keyword operation arguments.
-
-    Returns:
-        Tensor | None: Cast `Tensor` or `None`.
-    """
-    return _cast_or_none(DType.UInt16, *args, **kwargs)
-
-
-def uint32(*args: Tensor | TensorOperand, **kwargs: Tensor | TensorOperand) -> Tensor | None:
-    """Cast input to unsigned 32-bit integer (`uint32`).
-
-    Args:
-        *args: Positional operation arguments.
-        **kwargs: Keyword operation arguments.
-
-    Returns:
-        Tensor | None: Cast `Tensor` or `None`.
-    """
-    return _cast_or_none(DType.UInt32, *args, **kwargs)
-
-
-def uint64(*args: Tensor | TensorOperand, **kwargs: Tensor | TensorOperand) -> Tensor | None:
-    """Cast input to unsigned 64-bit integer (`uint64`).
-
-    Args:
-        *args: Positional operation arguments.
-        **kwargs: Keyword operation arguments.
-
-    Returns:
-        Tensor | None: Cast `Tensor` or `None`.
-    """
-    return _cast_or_none(DType.UInt64, *args, **kwargs)
-
-
-def resource(*args: Tensor | TensorOperand, **kwargs: Tensor | TensorOperand) -> Tensor | None:
-    """Represent a handle to a mutable resource (`tf.resource`).
-
-    Args:
-        *args: Positional operation arguments.
-        **kwargs: Keyword operation arguments.
-
-    Returns:
-        Tensor | None: Wrapped `Tensor` or `None`.
-    """
-    del kwargs
-    return _wrap_tensor(_to_tensor(args[0])) if args and args[0] is not None else None
-
-
-def variant(*args: Tensor | TensorOperand, **kwargs: Tensor | TensorOperand) -> Tensor | None:
-    """Represent a dynamic type variant tensor (`tf.variant`).
-
-    Args:
-        *args: Positional operation arguments.
-        **kwargs: Keyword operation arguments.
-
-    Returns:
-        Tensor | None: Wrapped `Tensor` or `None`.
-    """
-    del kwargs
-    return _wrap_tensor(_to_tensor(args[0])) if args and args[0] is not None else None
 
 
 def random_index_shuffle(
@@ -1899,12 +1930,27 @@ def truncatediv(
     if x is None or y is None:
         return None
     t_x = _to_tensor(x)
-    x_vals = _flatten_floats(_to_py_data(t_x))
-    y_vals = _flatten_floats(_to_py_data(y))
-    out = [int(xv / yv) if yv != 0.0 else 0 for xv, yv in zip(x_vals, y_vals)]
-    if not t_x.shape:
-        return Tensor(out[0] if out else 0, dtype=DType.Int32)
-    return _wrap_tensor(_k_ops.reshape(_to_tensor(out, dtype=DType.Int32), t_x.shape))
+    t_y = _to_tensor(y)
+    xf = _ops.cast(t_x, DType.Float64)
+    yf = _ops.cast(t_y, DType.Float64)
+    safe_y = _k_ops.where(
+        _ops.equal(yf, _to_tensor(0.0, dtype=DType.Float64)),
+        _to_tensor(1.0, dtype=DType.Float64),
+        yf,
+    )
+    q = _ops.divide(xf, safe_y)
+    trunc_q = _ops.multiply(_k_ops.sign(q), _k_ops.floor(_ops.abs(q)))
+    zeroed = _k_ops.where(
+        _ops.equal(yf, _to_tensor(0.0, dtype=DType.Float64)),
+        _to_tensor(0.0, dtype=DType.Float64),
+        trunc_q,
+    )
+    target_dt = (
+        t_x.dtype
+        if t_x.dtype in (DType.Float16, DType.Float32, DType.Float64, DType.BFloat16)
+        else DType.Int32
+    )
+    return _wrap_tensor(_ops.cast(zeroed, target_dt))
 
 
 def truncatemod(
@@ -1926,12 +1972,16 @@ def truncatemod(
     if x is None or y is None:
         return None
     t_x = _to_tensor(x)
-    x_vals = _flatten_floats(_to_py_data(t_x))
-    y_vals = _flatten_floats(_to_py_data(y))
-    out = [int(xv) - int(xv / yv) * int(yv) if yv != 0.0 else 0 for xv, yv in zip(x_vals, y_vals)]
-    if not t_x.shape:
-        return Tensor(out[0] if out else 0, dtype=DType.Int32)
-    return _wrap_tensor(_k_ops.reshape(_to_tensor(out, dtype=DType.Int32), t_x.shape))
+    t_y = _to_tensor(y)
+    q_trunc = _to_tensor(truncatediv(t_x, t_y))
+    target_dt = q_trunc.dtype
+    rem = _ops.subtract(
+        _ops.cast(t_x, target_dt),
+        _ops.multiply(q_trunc, _ops.cast(t_y, target_dt)),
+    )
+    yf = _ops.cast(t_y, target_dt)
+    zero_t = _to_tensor(0, dtype=target_dt)
+    return _wrap_tensor(_k_ops.where(_ops.equal(yf, zero_t), zero_t, rem))
 
 
 def reduce_logsumexp(
@@ -2200,12 +2250,12 @@ def _apply_scatter_1d(
     updates: Tensor | TensorOperand,
     mode: str,
 ) -> Tensor | None:
-    """Apply a scatter mutation (`update`, `add`, `sub`, `max`, `min`) along the leading axis.
+    """Apply a scatter mutation (`update`, `add`, `sub`, `max`, `min`) at `indices`.
 
     Args:
         tensor: Input `Tensor` to copy and update.
-        indices: Index `Tensor` (`[N, 1]` or `[N]`).
-        updates: Updates `Tensor` (`[N, ...]`).
+        indices: Index `Tensor` (`[..., M]` or `[N]`).
+        updates: Updates `Tensor` (`[..., *tensor.shape[M:]]`).
         mode: Scatter reduction mode (`'update'`, `'add'`, `'sub'`, `'max'`, `'min'`).
 
     Returns:
@@ -2216,21 +2266,37 @@ def _apply_scatter_1d(
     t_in = _to_tensor(tensor)
     if indices is None or updates is None:
         return _wrap_tensor(t_in)
+    t_ind = _to_tensor(indices)
     base_vals = _flatten_floats(_to_py_data(t_in))
-    idx_vals = _flatten_ints(_to_py_data(indices))
+    idx_vals = _flatten_ints(_to_py_data(t_ind))
     upd_vals = _flatten_floats(_to_py_data(updates))
-    for i_pos, u_val in zip(idx_vals, upd_vals):
-        if 0 <= i_pos < len(base_vals):
-            if mode == "update":
-                base_vals[i_pos] = u_val
-            elif mode == "add":
-                base_vals[i_pos] += u_val
-            elif mode == "sub":
-                base_vals[i_pos] -= u_val
-            elif mode == "max":
-                base_vals[i_pos] = max(base_vals[i_pos], u_val)
-            else:
-                base_vals[i_pos] = min(base_vals[i_pos], u_val)
+    in_shape = t_in.shape if t_in.shape else (1,)
+    coord_depth = min(len(in_shape), max(1, t_ind.shape[-1])) if len(t_ind.shape) >= 2 else 1
+    leading_shape = in_shape[:coord_depth]
+    slice_shape = in_shape[coord_depth:]
+    slice_size = int(math.prod(slice_shape)) if slice_shape else 1
+    num_coords = len(idx_vals) // coord_depth
+    for k in builtins.range(num_coords):
+        coord = idx_vals[k * coord_depth : (k + 1) * coord_depth]
+        if all(0 <= c_j < dim_j for c_j, dim_j in zip(coord, leading_shape)):
+            slice_idx = 0
+            for c_j, dim_j in zip(coord, leading_shape):
+                slice_idx = slice_idx * dim_j + c_j
+            base_offset = slice_idx * slice_size
+            upd_offset = k * slice_size
+            for s_i in builtins.range(slice_size):
+                b_pos = base_offset + s_i
+                u_val = upd_vals[min(upd_offset + s_i, len(upd_vals) - 1)]
+                if mode == "update":
+                    base_vals[b_pos] = u_val
+                elif mode == "add":
+                    base_vals[b_pos] += u_val
+                elif mode == "sub":
+                    base_vals[b_pos] -= u_val
+                elif mode == "max":
+                    base_vals[b_pos] = max(base_vals[b_pos], u_val)
+                else:
+                    base_vals[b_pos] = min(base_vals[b_pos], u_val)
     res_t = _to_tensor(base_vals, dtype=t_in.dtype)
     if t_in.shape:
         res_t = _k_ops.reshape(res_t, t_in.shape)

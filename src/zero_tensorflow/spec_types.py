@@ -10,12 +10,20 @@ from collections.abc import Callable, Iterator, Sequence
 from types import TracebackType
 from typing import Optional, TypeVar
 
-from zero_tensorflow._typing import ArrayLikeProtocol, CallableOperandProtocol, TensorOperand
-from zero_tensorflow.core_tensor import Tensor, Variable, _to_tensor, _wrap_tensor, to_dtype
+from zero_tensorflow._typing import ArrayLikeProtocol, GradFnProtocol, TensorOperand
+from zero_tensorflow.core_tensor import (
+    _ACTIVE_MODULE_STACK,
+    Tensor,
+    Variable,
+    _ModuleTrackerProtocol,
+    _to_tensor,
+    _wrap_tensor,
+    to_dtype,
+)
+from zero_tensorflow.dtypes import DType
 from zero_tensorflow.ragged import RaggedTensor
 from zero_tensorflow.sparse import SparseTensor
 
-from ml_switcheroo_compiler.core.dtype import DType
 from ml_switcheroo_compiler.tracing.state import global_tracing_state as _tracer
 from ml_switcheroo_compiler.transforms.autodiff_rules.common import (
     UnconnectedGradients as _MscUnconnectedGradients,
@@ -49,7 +57,7 @@ __all__ = [
 ]
 
 _R = TypeVar("_R")
-_GRADIENT_REGISTRY: dict[str, CallableOperandProtocol] = {}
+_GRADIENT_REGISTRY: dict[str, GradFnProtocol] = {}
 _NAME_SCOPE_STACK: list[str] = []
 
 
@@ -209,6 +217,107 @@ class TensorShape(builtins.tuple[Optional[int], ...]):
             return TensorShape(None)
         return TensorShape([*self, *other_shape])
 
+    def is_fully_defined(self) -> bool:
+        """Return `True` iff `self` is known rank and every dimension is specified.
+
+        Returns:
+            bool: `True` if rank and all dimensions are non-`None` integers.
+        """
+        return not self._unknown_rank and all(isinstance(d, int) for d in self)
+
+    def assert_is_fully_defined(self) -> None:
+        """Raise `ValueError` if `self` is not fully defined.
+
+        Raises:
+            ValueError: If `self` has unknown rank or any `None` dimension.
+        """
+        if not self.is_fully_defined():
+            raise ValueError(f"Shape {self} is not fully defined")
+
+    def assert_has_rank(self, rank: int) -> None:
+        """Raise `ValueError` if `self` is not compatible with the given `rank`.
+
+        Args:
+            rank: Expected rank integer.
+
+        Raises:
+            ValueError: If `self` has a known rank not equal to `rank`.
+        """
+        if not self._unknown_rank and len(self) != rank:
+            raise ValueError(f"Shape {self} must have rank {rank}")
+
+    def assert_is_compatible_with(
+        self,
+        other: TensorShape | Sequence[int | None] | int | TensorOperand,
+    ) -> None:
+        """Raise `ValueError` if `self` is not compatible with `other`.
+
+        Args:
+            other: Another `TensorShape` or shape-like sequence.
+
+        Raises:
+            ValueError: If `self` and `other` are incompatible.
+        """
+        if not self.is_compatible_with(other):
+            raise ValueError(f"Shapes {self} and {other!r} are incompatible")
+
+    def with_rank(self, rank: int) -> TensorShape:
+        """Return a shape based on `self` with the given `rank`.
+
+        Args:
+            rank: Required rank integer.
+
+        Returns:
+            TensorShape: Merged `TensorShape` of rank `rank`.
+        """
+        return self.merge_with(TensorShape([None] * rank))
+
+    def with_rank_at_least(self, rank: int) -> TensorShape:
+        """Return `self` if its rank is unknown or at least `rank`.
+
+        Args:
+            rank: Minimum required rank.
+
+        Returns:
+            TensorShape: `self`.
+
+        Raises:
+            ValueError: If `self` has known rank `< rank`.
+        """
+        if not self._unknown_rank and len(self) < rank:
+            raise ValueError(f"Shape {self} must have rank at least {rank}")
+        return self
+
+    def with_rank_at_most(self, rank: int) -> TensorShape:
+        """Return `self` if its rank is unknown or at most `rank`.
+
+        Args:
+            rank: Maximum allowed rank.
+
+        Returns:
+            TensorShape: `self`.
+
+        Raises:
+            ValueError: If `self` has known rank `> rank`.
+        """
+        if not self._unknown_rank and len(self) > rank:
+            raise ValueError(f"Shape {self} must have rank at most {rank}")
+        return self
+
+    def num_elements(self) -> int | None:
+        """Return the total number of elements, or `None` if shape is not fully defined.
+
+        Returns:
+            int | None: Product of dimensions if fully defined, else `None`.
+        """
+        if not self.is_fully_defined():
+            return None
+        prod = 1
+        for d in self:
+            assert isinstance(d, int)
+            prod *= d
+        return prod
+
 
 class TypeSpec:
     """Specifies a TensorFlow value type."""
@@ -322,6 +431,8 @@ class TensorSpec(TypeSpec):
         """
         t = tensor if isinstance(tensor, (Tensor, Variable)) else Tensor(tensor)
         return cls(shape=t.shape, dtype=t.dtype or DType.Float32, name=name)
+
+    from_value = from_tensor
 
 
 class RaggedTensorSpec(TypeSpec):
@@ -1342,14 +1453,14 @@ class RegisterGradient:
         """
         self.op_type = op_type
 
-    def __call__(self, f: CallableOperandProtocol) -> CallableOperandProtocol:
+    def __call__(self, f: GradFnProtocol) -> GradFnProtocol:
         """Register `f` as the gradient function for `self.op_type`.
 
         Args:
             f: Gradient callback function `(op, *grads) -> input_grads`.
 
         Returns:
-            CallableOperandProtocol: Unmodified `f`.
+            GradFnProtocol: Unmodified `f`.
         """
         _GRADIENT_REGISTRY[self.op_type] = f
 
@@ -1378,16 +1489,76 @@ class RegisterGradient:
         return f
 
 
-class Module:
+class Module(_ModuleTrackerProtocol):
     """Base neural network module class for tracking variables and submodules."""
 
-    def __init__(self, name: str | None = None) -> None:
+    _direct_variables: list[Variable]
+    _direct_submodules: list[Module]
+
+    def __init_subclass__(cls) -> None:
+        """Wrap subclass `__init__` so `_ACTIVE_MODULE_STACK` is popped on return."""
+        super().__init_subclass__()
+        orig_init = cls.__init__
+
+        def _wrapped_init(
+            self: Module,
+            *args: TensorOperand,
+            **kwargs: TensorOperand,
+        ) -> None:
+            """Execute subclass `__init__` within an active module tracking scope."""
+            if _ACTIVE_MODULE_STACK and isinstance(_ACTIVE_MODULE_STACK[-1], Module):
+                _ACTIVE_MODULE_STACK[-1]._direct_submodules.append(self)
+            _ACTIVE_MODULE_STACK.append(self)
+            try:
+                orig_init(self, *args, **kwargs)
+            finally:
+                _ACTIVE_MODULE_STACK.pop()
+
+        cls.__init__ = _wrapped_init  # type: ignore[method-assign]
+
+    def __new__(
+        cls,
+        *args: TensorOperand,
+        **kwargs: TensorOperand,
+    ) -> Module:
+        """Allocate a `Module` instance with initialized tracking lists.
+
+        Args:
+            *args: Positional arguments forwarded to `__init__`.
+            **kwargs: Keyword arguments forwarded to `__init__`.
+
+        Returns:
+            Module: Allocated `Module` instance.
+        """
+        del args, kwargs
+        instance = super().__new__(cls)
+        instance._direct_variables = []
+        instance._direct_submodules = []
+        return instance
+
+    def __init__(
+        self,
+        name: str | TensorOperand = None,
+        *args: TensorOperand,
+        **kwargs: TensorOperand,
+    ) -> None:
         """Initialize `Module`.
 
         Args:
             name: Optional module name string.
+            *args: Optional subclass positional arguments.
+            **kwargs: Optional subclass keyword arguments.
         """
-        self.name = name or type(self).__name__.lower()
+        del args, kwargs
+        self.name = name if isinstance(name, str) and name else type(self).__name__.lower()
+
+    def _register_variable(self, var: Variable) -> None:
+        """Register a newly created `Variable` on this `Module`.
+
+        Args:
+            var: Newly created `Variable` instance.
+        """
+        self._direct_variables.append(var)
 
     @property
     def variables(self) -> builtins.tuple[Variable, ...]:
@@ -1396,12 +1567,9 @@ class Module:
         Returns:
             tuple[Variable, ...]: Owned variables.
         """
-        found: list[Variable] = []
-        for val in vars(self).values():
-            if isinstance(val, Variable):
-                found.append(val)
-            elif isinstance(val, Module):
-                found.extend(val.variables)
+        found: list[Variable] = list(self._direct_variables)
+        for sub in self._direct_submodules:
+            found.extend(sub.variables)
         return builtins.tuple(found)
 
     @property
@@ -1414,10 +1582,19 @@ class Module:
         return builtins.tuple(v for v in self.variables if v.trainable)
 
     @property
+    def non_trainable_variables(self) -> builtins.tuple[Variable, ...]:
+        """Return sequence of non-trainable `Variable` attributes owned by this module.
+
+        Returns:
+            tuple[Variable, ...]: Non-trainable variables.
+        """
+        return builtins.tuple(v for v in self.variables if not v.trainable)
+
+    @property
     def submodules(self) -> builtins.tuple[Module, ...]:
         """Return sequence of child `Module` instances owned by this module.
 
         Returns:
             tuple[Module, ...]: Child modules.
         """
-        return builtins.tuple(val for val in vars(self).values() if isinstance(val, Module))
+        return builtins.tuple(self._direct_submodules)

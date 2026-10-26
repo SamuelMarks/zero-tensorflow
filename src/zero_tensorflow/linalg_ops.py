@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import builtins
+import itertools
+import math
 from collections.abc import Sequence
 
 from zero_tensorflow._typing import DTypeLike, IntTuple, TensorOperand, as_operand
 from zero_tensorflow.core_tensor import Tensor, _to_tensor, _wrap, _wrap_tensor, to_dtype
+from zero_tensorflow.dtypes import DType
 
 import ml_switcheroo_compiler.ops as _msc_ops
-from ml_switcheroo_compiler.core.dtype import DType
 from ml_switcheroo_compiler.tracing.state import global_tracing_state as _tracer
 
 from zero_keras import ops as _ops  # isort: skip
@@ -40,22 +42,92 @@ __all__ = [
 ]
 
 
-def _clean_linalg_kwargs(
-    kwargs: dict[str, Tensor | TensorOperand],
-) -> dict[str, int | float | bool | str | None]:
-    """Filter keyword arguments to scalar configuration values.
+def _to_nested_floats(t: Tensor) -> list[list[float]]:
+    """Extract a 2-D matrix `Tensor` into a nested list of floats.
 
     Args:
-        kwargs: Input keyword dictionary.
+        t: 2-D matrix `Tensor`.
 
     Returns:
-        dict[str, int | float | bool | str | None]: Cleaned keyword dictionary.
+        list[list[float]]: 2-D list of floats.
     """
-    return {
-        ("axis" if k == "dim" else k): v
-        for k, v in kwargs.items()
-        if k != "name" and (isinstance(v, (int, float, bool, str)) or v is None)
-    }
+    raw = t.tolist()
+    if not isinstance(raw, builtins.list):
+        return [[float(raw) if isinstance(raw, (int, float)) else 0.0]]
+    return [
+        [float(c) if isinstance(c, (int, float)) else 0.0 for c in r]
+        if isinstance(r, builtins.list)
+        else [float(r) if isinstance(r, (int, float)) else 0.0]
+        for r in raw
+    ]
+
+
+def _to_1d_floats(t: Tensor) -> list[float]:
+    """Extract a 1-D vector `Tensor` into a list of floats.
+
+    Args:
+        t: 1-D vector `Tensor`.
+
+    Returns:
+        list[float]: 1-D list of floats.
+    """
+    raw = t.tolist()
+    return (
+        [float(x) if isinstance(x, (int, float)) else 0.0 for x in raw]
+        if isinstance(raw, builtins.list)
+        else [float(raw) if isinstance(raw, (int, float)) else 0.0]
+    )
+
+
+def _iter_batch_indices(batch_shape: tuple[int, ...]) -> list[tuple[int, ...]]:
+    """Generate all multi-indices for `batch_shape`.
+
+    Args:
+        batch_shape: Leading batch dimensions tuple.
+
+    Returns:
+        list[tuple[int, ...]]: List of multi-index tuples.
+    """
+    return list(itertools.product(*(range(d) for d in batch_shape)))
+
+
+def _slice_batch_matrix(t: Tensor, idx: tuple[int, ...]) -> Tensor:
+    """Slice a single 2-D matrix from a batched tensor `t` at `idx`.
+
+    Args:
+        t: Batched matrix tensor of shape `[*batch_shape, M, N]`.
+        idx: Batch index tuple of length `len(batch_shape)`.
+
+    Returns:
+        Tensor: 2-D matrix slice `Tensor`.
+    """
+    cur = t
+    for i in idx:
+        cur = cur[i]
+    return cur
+
+
+def _stack_batch_results(
+    items: list[Tensor],
+    batch_shape: tuple[int, ...],
+    inner_shape: tuple[int, ...],
+    dtype: DType | None,
+) -> Tensor:
+    """Stack flat batch results back into `[*batch_shape, *inner_shape]`.
+
+    Args:
+        items: List of result tensors for each batch index.
+        batch_shape: Leading batch dimensions tuple.
+        inner_shape: Inner matrix/vector shape tuple.
+        dtype: Output tensor `DType`.
+
+    Returns:
+        Tensor: Reshaped batched `Tensor`.
+    """
+    stacked = _ops.stack([_to_tensor(it) for it in items], axis=0)
+    full_shape = batch_shape + inner_shape
+    dt_str = dtype.value if dtype is not None else "float32"
+    return _wrap_tensor(_ops.cast(_ops.reshape(stacked, full_shape), dt_str))
 
 
 class LinearOperator:
@@ -108,7 +180,15 @@ class LinearOperator:
         Returns:
             tuple[int, ...]: Operator dimensions.
         """
-        return self._matrix.shape
+        return self._to_dense().shape
+
+    def _to_dense(self) -> Tensor:
+        """Construct the dense matrix representation of this operator.
+
+        Returns:
+            Tensor: Dense matrix tensor.
+        """
+        return self._matrix
 
     def to_dense(self, name: str = "to_dense") -> Tensor:
         """Convert this `LinearOperator` into a dense `Tensor`.
@@ -120,7 +200,27 @@ class LinearOperator:
             Tensor: Dense matrix representation.
         """
         del name
-        return self._matrix
+        return self._to_dense()
+
+    def _matmul(
+        self,
+        x: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Specialized matrix multiplication implementation `self @ x`.
+
+        Args:
+            x: Right-hand matrix `Tensor`.
+            adjoint: If `True`, multiply by the adjoint of `self`.
+            adjoint_arg: If `True`, multiply by the adjoint of `x`.
+
+        Returns:
+            Tensor: Matrix product tensor.
+        """
+        lhs = linalg.adjoint(self._to_dense()) if adjoint else self._to_dense()
+        rhs = linalg.adjoint(x) if adjoint_arg else x
+        return linalg.matmul(lhs, rhs)
 
     def matmul(
         self,
@@ -141,9 +241,7 @@ class LinearOperator:
             Tensor: Matrix product tensor.
         """
         del name
-        lhs = linalg.adjoint(self.to_dense()) if adjoint else self.to_dense()
-        rhs = linalg.adjoint(x) if adjoint_arg else Tensor(x)
-        return linalg.matmul(lhs, rhs)
+        return self._matmul(Tensor(x, dtype=self.dtype), adjoint=adjoint, adjoint_arg=adjoint_arg)
 
     def matvec(
         self,
@@ -162,7 +260,29 @@ class LinearOperator:
             Tensor: Matrix-vector product tensor.
         """
         del name
-        return linalg.matvec(self.to_dense(), x, adjoint_a=adjoint)
+        x_col = _wrap_tensor(_ops.expand_dims(_to_tensor(Tensor(x, dtype=self.dtype)), -1))
+        prod = self._matmul(x_col, adjoint=adjoint, adjoint_arg=False)
+        return _wrap_tensor(_ops.squeeze(_to_tensor(prod), axis=-1))
+
+    def _solve(
+        self,
+        rhs: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Specialized linear system solver `self @ X = rhs`.
+
+        Args:
+            rhs: Right-hand side matrix `Tensor`.
+            adjoint: If `True`, solve with the adjoint of `self`.
+            adjoint_arg: If `True`, solve with the adjoint of `rhs`.
+
+        Returns:
+            Tensor: Solution tensor `X`.
+        """
+        mat = linalg.adjoint(self._to_dense()) if adjoint else self._to_dense()
+        b = linalg.adjoint(rhs) if adjoint_arg else rhs
+        return linalg.solve(mat, b)
 
     def solve(
         self,
@@ -183,9 +303,19 @@ class LinearOperator:
             Tensor: Solution tensor `X`.
         """
         del name
-        mat = linalg.adjoint(self.to_dense()) if adjoint else self.to_dense()
-        b = linalg.adjoint(rhs) if adjoint_arg else Tensor(rhs)
-        return linalg.solve(mat, b)
+        return self._solve(
+            Tensor(rhs, dtype=self.dtype),
+            adjoint=adjoint,
+            adjoint_arg=adjoint_arg,
+        )
+
+    def _determinant(self) -> Tensor:
+        """Specialized determinant computation.
+
+        Returns:
+            Tensor: Determinant tensor.
+        """
+        return linalg.det(self._to_dense())
 
     def determinant(self, name: str = "det") -> Tensor:
         """Compute the determinant for every batch member.
@@ -197,7 +327,16 @@ class LinearOperator:
             Tensor: Determinant tensor.
         """
         del name
-        return linalg.det(self.to_dense())
+        return self._determinant()
+
+    def _log_abs_determinant(self) -> Tensor:
+        """Specialized log-abs-determinant computation.
+
+        Returns:
+            Tensor: Log-abs-determinant tensor.
+        """
+        det_t = _to_tensor(self._determinant())
+        return _wrap_tensor(_msc_ops.log(_msc_ops.abs(det_t)))
 
     def log_abs_determinant(self, name: str = "log_abs_det") -> Tensor:
         """Compute the log of the absolute value of the determinant.
@@ -209,8 +348,35 @@ class LinearOperator:
             Tensor: Log-abs-determinant tensor.
         """
         del name
-        det_t = _to_tensor(self.determinant())
-        return _wrap_tensor(_msc_ops.log(_msc_ops.abs(det_t)))
+        return self._log_abs_determinant()
+
+    def _diag_part(self) -> Tensor:
+        """Specialized diagonal part extraction.
+
+        Returns:
+            Tensor: Diagonal vector tensor.
+        """
+        return linalg.diag_part(self._to_dense())
+
+    def diag_part(self, name: str = "diag_part") -> Tensor:
+        """Extract the main diagonal of this linear operator.
+
+        Args:
+            name: Optional operation name.
+
+        Returns:
+            Tensor: Diagonal vector tensor.
+        """
+        del name
+        return self._diag_part()
+
+    def _trace(self) -> Tensor:
+        """Specialized trace computation.
+
+        Returns:
+            Tensor: Trace tensor.
+        """
+        return _wrap_tensor(_ops.sum(_to_tensor(self._diag_part()), axis=-1))
 
     def trace(self, name: str = "trace") -> Tensor:
         """Compute the trace of the linear operator.
@@ -222,7 +388,7 @@ class LinearOperator:
             Tensor: Trace tensor.
         """
         del name
-        return linalg.trace(self.to_dense())
+        return self._trace()
 
     def inverse(self, name: str = "inverse") -> LinearOperatorFullMatrix:
         """Return the `LinearOperator` representing the inverse of this operator.
@@ -233,7 +399,7 @@ class LinearOperator:
         Returns:
             LinearOperatorFullMatrix: Inverse linear operator.
         """
-        return LinearOperatorFullMatrix(linalg.inv(self.to_dense()), name=name)
+        return LinearOperatorFullMatrix(linalg.inv(self._to_dense()), name=name)
 
     def cholesky(self, name: str = "cholesky") -> LinearOperatorLowerTriangular:
         """Return a Cholesky factor as a `LinearOperatorLowerTriangular`.
@@ -244,7 +410,7 @@ class LinearOperator:
         Returns:
             LinearOperatorLowerTriangular: Lower-triangular Cholesky factor operator.
         """
-        return LinearOperatorLowerTriangular(linalg.cholesky(self.to_dense()), name=name)
+        return LinearOperatorLowerTriangular(linalg.cholesky(self._to_dense()), name=name)
 
     def adjoint(self, name: str = "adjoint") -> LinearOperatorFullMatrix:
         """Return the conjugate transpose (adjoint) `LinearOperator`.
@@ -255,7 +421,7 @@ class LinearOperator:
         Returns:
             LinearOperatorFullMatrix: Adjoint linear operator.
         """
-        return LinearOperatorFullMatrix(linalg.adjoint(self.to_dense()), name=name)
+        return LinearOperatorFullMatrix(linalg.adjoint(self._to_dense()), name=name)
 
     @property
     def H(self) -> LinearOperatorFullMatrix:
@@ -353,6 +519,88 @@ class LinearOperatorDiag(LinearOperator):
             matrix=t_mat,
         )
 
+    def _to_dense(self) -> Tensor:
+        """Construct dense diagonal matrix from `self.diag`.
+
+        Returns:
+            Tensor: Dense diagonal matrix tensor.
+        """
+        return linalg.diag(self.diag)
+
+    def _diag_part(self) -> Tensor:
+        """Return `self.diag` directly.
+
+        Returns:
+            Tensor: Diagonal vector tensor.
+        """
+        return self.diag
+
+    def _trace(self) -> Tensor:
+        """Compute trace as the sum of `self.diag` along the last axis.
+
+        Returns:
+            Tensor: Trace tensor.
+        """
+        return _wrap_tensor(_ops.sum(_to_tensor(self.diag), axis=-1))
+
+    def _determinant(self) -> Tensor:
+        """Compute determinant as the product of `self.diag` along the last axis.
+
+        Returns:
+            Tensor: Determinant tensor.
+        """
+        return _wrap_tensor(_ops.prod(_to_tensor(self.diag), axis=-1))
+
+    def _log_abs_determinant(self) -> Tensor:
+        """Compute log-abs-determinant as the sum of `log(abs(self.diag))`.
+
+        Returns:
+            Tensor: Log-abs-determinant tensor.
+        """
+        return _wrap_tensor(_ops.sum(_msc_ops.log(_msc_ops.abs(_to_tensor(self.diag))), axis=-1))
+
+    def _matmul(
+        self,
+        x: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Multiply diagonal vector elementwise with rows of `x`.
+
+        Args:
+            x: Right-hand matrix `Tensor`.
+            adjoint: If `True`, conjugate the diagonal.
+            adjoint_arg: If `True`, multiply by the adjoint of `x`.
+
+        Returns:
+            Tensor: Matrix product tensor.
+        """
+        del adjoint
+        rhs = linalg.adjoint(x) if adjoint_arg else x
+        d_col = _ops.expand_dims(_to_tensor(self.diag), -1)
+        return _wrap_tensor(_msc_ops.multiply(d_col, _to_tensor(rhs)))
+
+    def _solve(
+        self,
+        rhs: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Solve diagonal system by dividing rows of `rhs` by `self.diag`.
+
+        Args:
+            rhs: Right-hand side matrix `Tensor`.
+            adjoint: If `True`, conjugate the diagonal.
+            adjoint_arg: If `True`, solve with the adjoint of `rhs`.
+
+        Returns:
+            Tensor: Solution tensor.
+        """
+        del adjoint
+        b = linalg.adjoint(rhs) if adjoint_arg else rhs
+        d_col = _ops.expand_dims(_to_tensor(self.diag), -1)
+        return _wrap_tensor(_msc_ops.divide(_to_tensor(b), d_col))
+
 
 class LinearOperatorIdentity(LinearOperator):
     """`LinearOperator` acting like a [batch] square identity matrix."""
@@ -382,9 +630,15 @@ class LinearOperatorIdentity(LinearOperator):
             assert_proper_shapes: Whether to assert proper shapes.
             name: Name of the operator.
         """
-        del batch_shape, assert_proper_shapes
+        del assert_proper_shapes
+        self._num_rows = int(num_rows)
+        self._batch_shape: IntTuple = tuple(batch_shape) if batch_shape is not None else ()
         resolved_dtype = to_dtype(dtype)
-        t_mat = linalg.eye(num_rows, dtype=resolved_dtype.value)
+        t_mat = linalg.eye(
+            self._num_rows,
+            batch_shape=self._batch_shape if self._batch_shape else None,
+            dtype=resolved_dtype.value,
+        )
         super().__init__(
             dtype=resolved_dtype,
             is_non_singular=is_non_singular,
@@ -394,6 +648,86 @@ class LinearOperatorIdentity(LinearOperator):
             name=name,
             matrix=t_mat,
         )
+
+    def _to_dense(self) -> Tensor:
+        """Return the identity matrix tensor.
+
+        Returns:
+            Tensor: Identity matrix tensor.
+        """
+        return self._matrix
+
+    def _diag_part(self) -> Tensor:
+        """Return ones vector of length `num_rows`.
+
+        Returns:
+            Tensor: Ones diagonal vector.
+        """
+        return _wrap_tensor(_ops.ones((*self._batch_shape, self._num_rows), dtype=self.dtype.value))
+
+    def _trace(self) -> Tensor:
+        """Return `num_rows` as trace.
+
+        Returns:
+            Tensor: Trace tensor.
+        """
+        return _wrap_tensor(
+            _ops.full(self._batch_shape, float(self._num_rows), dtype=self.dtype.value)
+        )
+
+    def _determinant(self) -> Tensor:
+        """Return `1` as determinant.
+
+        Returns:
+            Tensor: Determinant tensor.
+        """
+        return _wrap_tensor(_ops.ones(self._batch_shape, dtype=self.dtype.value))
+
+    def _log_abs_determinant(self) -> Tensor:
+        """Return `0` as log-abs-determinant.
+
+        Returns:
+            Tensor: Log-abs-determinant tensor.
+        """
+        return _wrap_tensor(_ops.zeros(self._batch_shape, dtype=self.dtype.value))
+
+    def _matmul(
+        self,
+        x: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Multiply by identity (returning `x` or `adjoint(x)`).
+
+        Args:
+            x: Right-hand matrix `Tensor`.
+            adjoint: Unused for identity.
+            adjoint_arg: If `True`, return the adjoint of `x`.
+
+        Returns:
+            Tensor: Result tensor.
+        """
+        del adjoint
+        return linalg.adjoint(x) if adjoint_arg else x
+
+    def _solve(
+        self,
+        rhs: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Solve identity system (returning `rhs` or `adjoint(rhs)`).
+
+        Args:
+            rhs: Right-hand side `Tensor`.
+            adjoint: Unused for identity.
+            adjoint_arg: If `True`, return the adjoint of `rhs`.
+
+        Returns:
+            Tensor: Solution tensor.
+        """
+        del adjoint
+        return linalg.adjoint(rhs) if adjoint_arg else rhs
 
 
 class LinearOperatorLowerTriangular(LinearOperator):
@@ -418,16 +752,69 @@ class LinearOperatorLowerTriangular(LinearOperator):
             is_square: Hint that operator is square.
             name: Name of the operator.
         """
-        t_mat = linalg.band_part(tril, -1, 0)
+        self._tril = linalg.band_part(tril, -1, 0)
         super().__init__(
-            dtype=t_mat.dtype,
+            dtype=self._tril.dtype,
             is_non_singular=is_non_singular,
             is_self_adjoint=is_self_adjoint,
             is_positive_definite=is_positive_definite,
             is_square=is_square,
             name=name,
-            matrix=t_mat,
+            matrix=self._tril,
         )
+
+    def _to_dense(self) -> Tensor:
+        """Return the lower-triangular dense matrix.
+
+        Returns:
+            Tensor: Lower-triangular matrix tensor.
+        """
+        return self._tril
+
+    def _diag_part(self) -> Tensor:
+        """Extract main diagonal of the lower-triangular matrix.
+
+        Returns:
+            Tensor: Diagonal vector tensor.
+        """
+        return linalg.diag_part(self._tril)
+
+    def _determinant(self) -> Tensor:
+        """Compute determinant as product of the diagonal entries.
+
+        Returns:
+            Tensor: Determinant tensor.
+        """
+        return _wrap_tensor(_ops.prod(_to_tensor(self._diag_part()), axis=-1))
+
+    def _log_abs_determinant(self) -> Tensor:
+        """Compute log-abs-determinant from the diagonal entries.
+
+        Returns:
+            Tensor: Log-abs-determinant tensor.
+        """
+        return _wrap_tensor(
+            _ops.sum(_msc_ops.log(_msc_ops.abs(_to_tensor(self._diag_part()))), axis=-1)
+        )
+
+    def _solve(
+        self,
+        rhs: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Solve triangular system using `linalg.triangular_solve`.
+
+        Args:
+            rhs: Right-hand side `Tensor`.
+            adjoint: If `True`, solve with adjoint of `self`.
+            adjoint_arg: If `True`, solve with adjoint of `rhs`.
+
+        Returns:
+            Tensor: Solution tensor.
+        """
+        b = linalg.adjoint(rhs) if adjoint_arg else rhs
+        return linalg.triangular_solve(self._tril, b, lower=True, adjoint=adjoint)
 
 
 def _extract_operator_dense(op: LinearOperator | Tensor | TensorOperand) -> Tensor:
@@ -476,6 +863,85 @@ class LinearOperatorAdjoint(LinearOperator):
             matrix=t_mat,
         )
 
+    def _to_dense(self) -> Tensor:
+        """Return the adjoint of the underlying operator's dense matrix.
+
+        Returns:
+            Tensor: Dense adjoint matrix tensor.
+        """
+        return linalg.adjoint(_extract_operator_dense(self.operator))
+
+    def _matmul(
+        self,
+        x: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Delegate `_matmul` with flipped `adjoint` flag when `operator` is a `LinearOperator`.
+
+        Args:
+            x: Right-hand matrix `Tensor`.
+            adjoint: If `True`, multiply by the adjoint of `self` (i.e. `self.operator`).
+            adjoint_arg: If `True`, multiply by the adjoint of `x`.
+
+        Returns:
+            Tensor: Matrix product tensor.
+        """
+        if isinstance(self.operator, LinearOperator):
+            return self.operator._matmul(x, adjoint=not adjoint, adjoint_arg=adjoint_arg)
+        return super()._matmul(x, adjoint=adjoint, adjoint_arg=adjoint_arg)
+
+    def _solve(
+        self,
+        rhs: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Delegate `_solve` with flipped `adjoint` flag when `operator` is a `LinearOperator`.
+
+        Args:
+            rhs: Right-hand side `Tensor`.
+            adjoint: If `True`, solve with the adjoint of `self`.
+            adjoint_arg: If `True`, solve with the adjoint of `rhs`.
+
+        Returns:
+            Tensor: Solution tensor.
+        """
+        if isinstance(self.operator, LinearOperator):
+            return self.operator._solve(rhs, adjoint=not adjoint, adjoint_arg=adjoint_arg)
+        return super()._solve(rhs, adjoint=adjoint, adjoint_arg=adjoint_arg)
+
+
+def _build_block_diag_dense(mats: list[Tensor]) -> Tensor:
+    """Construct a block-diagonal dense matrix from a list of 2-D+ matrix `Tensor`s.
+
+    Args:
+        mats: Non-empty list of matrix `Tensor`s.
+
+    Returns:
+        Tensor: Block-diagonal matrix `Tensor`.
+    """
+    if not mats:
+        return Tensor([[1.0]])
+    if len(mats) == 1:
+        return mats[0]
+    dt = mats[0].dtype or DType.Float32
+    total_rows = sum(m.shape[-2] if len(m.shape) >= 2 else 1 for m in mats)
+    total_cols = sum(m.shape[-1] if len(m.shape) >= 2 else 1 for m in mats)
+    grid: list[list[float]] = [[0.0 for _ in range(total_cols)] for _ in range(total_rows)]
+    r_off = 0
+    c_off = 0
+    for m in mats:
+        sub = _to_nested_floats(m)
+        r_len = len(sub)
+        c_len = len(sub[0]) if sub else 0
+        for i in range(r_len):
+            for j in range(c_len):
+                grid[r_off + i][c_off + j] = sub[i][j]
+        r_off += r_len
+        c_off += c_len
+    return Tensor(grid, dtype=dt)
+
 
 class LinearOperatorBlockDiag(LinearOperator):
     """`LinearOperator` combining one or more operators into a block-diagonal matrix."""
@@ -501,7 +967,7 @@ class LinearOperatorBlockDiag(LinearOperator):
         """
         self.operators = list(operators)
         mats = [_extract_operator_dense(op) for op in self.operators]
-        t_mat = mats[0] if mats else Tensor([[1.0]])
+        t_mat = _build_block_diag_dense(mats)
         super().__init__(
             dtype=t_mat.dtype,
             is_non_singular=is_non_singular,
@@ -511,6 +977,91 @@ class LinearOperatorBlockDiag(LinearOperator):
             name=name or "LinearOperatorBlockDiag",
             matrix=t_mat,
         )
+
+    def _to_dense(self) -> Tensor:
+        """Construct the block-diagonal dense matrix from `self.operators`.
+
+        Returns:
+            Tensor: Block-diagonal dense matrix.
+        """
+        return _build_block_diag_dense([_extract_operator_dense(op) for op in self.operators])
+
+    def _determinant(self) -> Tensor:
+        """Compute determinant as the product of block determinants.
+
+        Returns:
+            Tensor: Determinant tensor.
+        """
+        if not self.operators:
+            return Tensor(1.0, dtype=self.dtype)
+        dets = [
+            op.determinant()
+            if isinstance(op, LinearOperator)
+            else linalg.det(_extract_operator_dense(op))
+            for op in self.operators
+        ]
+        acc = _to_tensor(dets[0])
+        for d in dets[1:]:
+            acc = _msc_ops.multiply(acc, _to_tensor(d))
+        return _wrap_tensor(acc)
+
+    def _trace(self) -> Tensor:
+        """Compute trace as the sum of block traces.
+
+        Returns:
+            Tensor: Trace tensor.
+        """
+        if not self.operators:
+            return Tensor(1.0, dtype=self.dtype)
+        traces = [
+            op.trace()
+            if isinstance(op, LinearOperator)
+            else linalg.trace(_extract_operator_dense(op))
+            for op in self.operators
+        ]
+        acc = _to_tensor(traces[0])
+        for tr in traces[1:]:
+            acc = _msc_ops.add(acc, _to_tensor(tr))
+        return _wrap_tensor(acc)
+
+
+def _build_block_lower_triangular_dense(
+    operators: Sequence[Sequence[LinearOperator | Tensor | TensorOperand]] | TensorOperand,
+) -> Tensor:
+    """Build a dense block-lower-triangular matrix from nested row sequences.
+
+    Args:
+        operators: Nested sequence of lower-triangular block rows.
+
+    Returns:
+        Tensor: Dense block-lower-triangular matrix `Tensor`.
+    """
+    if not isinstance(operators, Sequence) or isinstance(operators, (str, bytes)) or not operators:
+        return Tensor([[1.0]])
+    rows_ops: list[list[Tensor]] = [
+        [_extract_operator_dense(op) for op in row]
+        for row in operators
+        if isinstance(row, Sequence) and not isinstance(row, (str, bytes)) and len(row) > 0
+    ]
+    if not rows_ops:
+        return Tensor([[1.0]])
+    row_heights = [r[-1].shape[-2] if len(r[-1].shape) >= 2 else 1 for r in rows_ops]
+    col_widths = [r[-1].shape[-1] if len(r[-1].shape) >= 2 else 1 for r in rows_ops]
+    total_r = sum(row_heights)
+    total_c = sum(col_widths)
+    dt = rows_ops[0][0].dtype or DType.Float32
+    grid: list[list[float]] = [[0.0 for _ in range(total_c)] for _ in range(total_r)]
+    r_off = 0
+    for r_idx, row_mats in enumerate(rows_ops):
+        c_off = 0
+        for c_idx, mat in enumerate(row_mats):
+            sub = _to_nested_floats(mat)
+            for i, sub_row in enumerate(sub):
+                for j, val in enumerate(sub_row):
+                    grid[r_off + i][c_off + j] = val
+            c_off += col_widths[c_idx]
+        r_off += row_heights[r_idx]
+    return Tensor(grid, dtype=dt)
 
 
 class LinearOperatorBlockLowerTriangular(LinearOperator):
@@ -537,14 +1088,48 @@ class LinearOperatorBlockLowerTriangular(LinearOperator):
             name: Name of the operator.
         """
         self.operators = operators
+        t_mat = _build_block_lower_triangular_dense(operators)
         super().__init__(
+            dtype=t_mat.dtype,
             is_non_singular=is_non_singular,
             is_self_adjoint=is_self_adjoint,
             is_positive_definite=is_positive_definite,
             is_square=is_square,
             name=name,
-            matrix=Tensor([[1.0]]),
+            matrix=t_mat,
         )
+
+    def _to_dense(self) -> Tensor:
+        """Return the block-lower-triangular dense matrix.
+
+        Returns:
+            Tensor: Dense matrix tensor.
+        """
+        return _build_block_lower_triangular_dense(self.operators)
+
+
+def _build_circulant_dense(spectrum: Tensor) -> Tensor:
+    """Build a real circulant matrix from its 1-D spectrum or first-column coefficients.
+
+    Args:
+        spectrum: Spectrum tensor.
+
+    Returns:
+        Tensor: Dense `[N, N]` circulant matrix.
+    """
+    vals = _to_1d_floats(_wrap_tensor(_ops.reshape(_to_tensor(spectrum), (-1,))))
+    n = len(vals)
+    if n == 0:
+        return Tensor([[1.0]], dtype=spectrum.dtype)
+    # Inverse DFT of spectrum gives the first column c_k = (1/N) sum_j spectrum_j * cos(2*pi*j*k/N)
+    col: list[float] = []
+    for k in range(n):
+        re_sum = 0.0
+        for j, s_val in enumerate(vals):
+            re_sum += s_val * math.cos(2.0 * math.pi * j * k / n)
+        col.append(re_sum / n)
+    grid: list[list[float]] = [[col[(i - j) % n] for j in range(n)] for i in range(n)]
+    return Tensor(grid, dtype=spectrum.dtype)
 
 
 class LinearOperatorCirculant(LinearOperator):
@@ -573,7 +1158,7 @@ class LinearOperatorCirculant(LinearOperator):
         """
         self.spectrum = Tensor(spectrum)
         self.input_output_dtype = input_output_dtype
-        t_mat = linalg.diag(self.spectrum)
+        t_mat = _build_circulant_dense(self.spectrum)
         super().__init__(
             dtype=t_mat.dtype,
             is_non_singular=is_non_singular,
@@ -583,6 +1168,30 @@ class LinearOperatorCirculant(LinearOperator):
             name=name,
             matrix=t_mat,
         )
+
+    def _to_dense(self) -> Tensor:
+        """Return the circulant dense matrix.
+
+        Returns:
+            Tensor: Circulant matrix tensor.
+        """
+        return _build_circulant_dense(self.spectrum)
+
+    def _determinant(self) -> Tensor:
+        """Compute determinant as the product of the spectrum eigenvalues.
+
+        Returns:
+            Tensor: Determinant tensor.
+        """
+        return _wrap_tensor(_ops.prod(_to_tensor(self.spectrum), axis=-1))
+
+    def _trace(self) -> Tensor:
+        """Compute trace as the sum of the spectrum eigenvalues.
+
+        Returns:
+            Tensor: Trace tensor.
+        """
+        return _wrap_tensor(_ops.sum(_to_tensor(self.spectrum), axis=-1))
 
 
 class LinearOperatorCirculant2D(LinearOperatorCirculant):
@@ -678,19 +1287,97 @@ class LinearOperatorComposition(LinearOperator):
             name: Optional name for the operator.
         """
         self.operators = list(operators)
-        mats = [_extract_operator_dense(op) for op in self.operators]
-        acc = mats[0] if mats else Tensor([[1.0]])
-        for m in mats[1:]:
-            acc = linalg.matmul(acc, m)
+        t_mat = self._compute_composed_dense()
         super().__init__(
-            dtype=acc.dtype,
+            dtype=t_mat.dtype,
             is_non_singular=is_non_singular,
             is_self_adjoint=is_self_adjoint,
             is_positive_definite=is_positive_definite,
             is_square=is_square,
             name=name or "LinearOperatorComposition",
-            matrix=acc,
+            matrix=t_mat,
         )
+
+    def _compute_composed_dense(self) -> Tensor:
+        """Multiply all constituent operator matrices left-to-right.
+
+        Returns:
+            Tensor: Composed dense matrix tensor.
+        """
+        mats = [_extract_operator_dense(op) for op in self.operators]
+        acc = mats[0] if mats else Tensor([[1.0]])
+        for m in mats[1:]:
+            acc = linalg.matmul(acc, m)
+        return acc
+
+    def _to_dense(self) -> Tensor:
+        """Return the composed dense matrix.
+
+        Returns:
+            Tensor: Composed dense matrix tensor.
+        """
+        return self._compute_composed_dense()
+
+    def _matmul(
+        self,
+        x: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Apply operators sequentially from right to left (`A_0 @ (A_1 @ x)`).
+
+        Args:
+            x: Right-hand matrix `Tensor`.
+            adjoint: If `True`, apply adjoints in reverse order.
+            adjoint_arg: If `True`, multiply by the adjoint of `x`.
+
+        Returns:
+            Tensor: Matrix product tensor.
+        """
+        cur = linalg.adjoint(x) if adjoint_arg else x
+        if not self.operators:
+            return cur
+        ops_order = list(self.operators) if adjoint else list(reversed(self.operators))
+        for op in ops_order:
+            if isinstance(op, LinearOperator):
+                cur = op.matmul(cur, adjoint=adjoint)
+            else:
+                mat = (
+                    linalg.adjoint(_extract_operator_dense(op))
+                    if adjoint
+                    else _extract_operator_dense(op)
+                )
+                cur = linalg.matmul(mat, cur)
+        return cur
+
+
+def _build_householder_dense(reflection_axis: Tensor) -> Tensor:
+    """Build Householder reflection matrix `I - 2 v v^T / (v^T v)`.
+
+    Args:
+        reflection_axis: 1-D or batched reflection vector tensor.
+
+    Returns:
+        Tensor: Dense Householder reflection matrix.
+    """
+    n = reflection_axis.shape[-1] if reflection_axis.shape else 1
+    dt_str = reflection_axis.dtype.value if reflection_axis.dtype is not None else "float32"
+    eye_m = _to_tensor(linalg.eye(n, dtype=dt_str))
+    if not reflection_axis.shape:
+        return _wrap_tensor(_msc_ops.negative(eye_m))
+    v = _to_tensor(reflection_axis)
+    norm_sq = _ops.sum(_msc_ops.multiply(v, v), axis=-1, keepdims=True)
+    norm_sq_safe = _ops.where(
+        _msc_ops.greater(norm_sq, _to_tensor(1e-12, dtype=reflection_axis.dtype)),
+        norm_sq,
+        _to_tensor(1.0, dtype=reflection_axis.dtype),
+    )
+    v_col = _ops.expand_dims(v, -1)
+    v_row = _ops.expand_dims(v, -2)
+    outer = _ops.matmul(v_col, v_row)
+    two_outer = _msc_ops.multiply(_to_tensor(2.0, dtype=reflection_axis.dtype), outer)
+    scaled = _msc_ops.divide(two_outer, _ops.expand_dims(norm_sq_safe, -1))
+    return _wrap_tensor(_msc_ops.subtract(eye_m, scaled))
 
 
 class LinearOperatorHouseholder(LinearOperator):
@@ -699,10 +1386,10 @@ class LinearOperatorHouseholder(LinearOperator):
     def __init__(
         self,
         reflection_axis: Tensor | TensorOperand = (1.0,),
-        is_non_singular: bool | None = None,
-        is_self_adjoint: bool | None = None,
-        is_positive_definite: bool | None = None,
-        is_square: bool | None = None,
+        is_non_singular: bool | None = True,
+        is_self_adjoint: bool | None = True,
+        is_positive_definite: bool | None = False,
+        is_square: bool | None = True,
         name: str = "LinearOperatorHouseholder",
     ) -> None:
         """Initialize `LinearOperatorHouseholder`.
@@ -716,12 +1403,7 @@ class LinearOperatorHouseholder(LinearOperator):
             name: Name of the operator.
         """
         self.reflection_axis = Tensor(reflection_axis)
-        n = self.reflection_axis.shape[-1] if self.reflection_axis.shape else 1
-        dt_str = (
-            self.reflection_axis.dtype.value
-            if self.reflection_axis.dtype is not None
-            else "float32"
-        )
+        t_mat = _build_householder_dense(self.reflection_axis)
         super().__init__(
             dtype=self.reflection_axis.dtype,
             is_non_singular=is_non_singular,
@@ -729,8 +1411,50 @@ class LinearOperatorHouseholder(LinearOperator):
             is_positive_definite=is_positive_definite,
             is_square=is_square,
             name=name,
-            matrix=linalg.eye(n, dtype=dt_str),
+            matrix=t_mat,
         )
+
+    def _to_dense(self) -> Tensor:
+        """Return the Householder reflection dense matrix.
+
+        Returns:
+            Tensor: Householder reflection matrix tensor.
+        """
+        return _build_householder_dense(self.reflection_axis)
+
+    def _determinant(self) -> Tensor:
+        """Return `-1.0` as the determinant of a Householder reflection.
+
+        Returns:
+            Tensor: Scalar `-1.0` tensor.
+        """
+        return Tensor(-1.0, dtype=self.dtype)
+
+    def _log_abs_determinant(self) -> Tensor:
+        """Return `0.0` as the log-abs-determinant of a Householder reflection.
+
+        Returns:
+            Tensor: Scalar `0.0` tensor.
+        """
+        return Tensor(0.0, dtype=self.dtype)
+
+    def _solve(
+        self,
+        rhs: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Solve `H @ X = rhs` using `H^{-1} = H`.
+
+        Args:
+            rhs: Right-hand side `Tensor`.
+            adjoint: If `True`, solve with adjoint.
+            adjoint_arg: If `True`, solve with adjoint of `rhs`.
+
+        Returns:
+            Tensor: Solution tensor `H @ rhs`.
+        """
+        return self._matmul(rhs, adjoint=adjoint, adjoint_arg=adjoint_arg)
 
 
 class LinearOperatorInversion(LinearOperator):
@@ -767,6 +1491,80 @@ class LinearOperatorInversion(LinearOperator):
             matrix=t_mat,
         )
 
+    def _to_dense(self) -> Tensor:
+        """Return the inverse of the underlying operator's dense matrix.
+
+        Returns:
+            Tensor: Inverse dense matrix tensor.
+        """
+        return linalg.inv(_extract_operator_dense(self.operator))
+
+    def _matmul(
+        self,
+        x: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Multiply by `A^{-1}` via `A.solve(x)`.
+
+        Args:
+            x: Right-hand matrix `Tensor`.
+            adjoint: If `True`, multiply by `(A^{-1})^H`.
+            adjoint_arg: If `True`, multiply by `x^H`.
+
+        Returns:
+            Tensor: Matrix product `A^{-1} @ x`.
+        """
+        if isinstance(self.operator, LinearOperator):
+            return self.operator._solve(x, adjoint=adjoint, adjoint_arg=adjoint_arg)
+        return super()._matmul(x, adjoint=adjoint, adjoint_arg=adjoint_arg)
+
+    def _solve(
+        self,
+        rhs: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Solve `A^{-1} X = rhs` via `A @ rhs`.
+
+        Args:
+            rhs: Right-hand side `Tensor`.
+            adjoint: If `True`, solve with `(A^{-1})^H`.
+            adjoint_arg: If `True`, solve with `rhs^H`.
+
+        Returns:
+            Tensor: Solution tensor `A @ rhs`.
+        """
+        if isinstance(self.operator, LinearOperator):
+            return self.operator._matmul(rhs, adjoint=adjoint, adjoint_arg=adjoint_arg)
+        return super()._solve(rhs, adjoint=adjoint, adjoint_arg=adjoint_arg)
+
+
+def _kronecker_product_2d(a: Tensor, b: Tensor) -> Tensor:
+    """Compute the Kronecker product `a (x) b` of two 2-D matrix `Tensor`s.
+
+    Args:
+        a: First 2-D matrix `Tensor` of shape `[M, N]`.
+        b: Second 2-D matrix `Tensor` of shape `[P, Q]`.
+
+    Returns:
+        Tensor: Kronecker product `Tensor` of shape `[M * P, N * Q]`.
+    """
+    mat_a = _to_nested_floats(a)
+    mat_b = _to_nested_floats(b)
+    m = len(mat_a)
+    n = len(mat_a[0]) if mat_a else 0
+    p = len(mat_b)
+    q = len(mat_b[0]) if mat_b else 0
+    grid: list[list[float]] = [[0.0 for _ in range(n * q)] for _ in range(m * p)]
+    for i in range(m):
+        for j in range(n):
+            a_val = mat_a[i][j]
+            for r in range(p):
+                for s in range(q):
+                    grid[i * p + r][j * q + s] = a_val * mat_b[r][s]
+    return Tensor(grid, dtype=a.dtype)
+
 
 class LinearOperatorKronecker(LinearOperator):
     """`LinearOperator` acting like the Kronecker product of a sequence of operators."""
@@ -791,8 +1589,7 @@ class LinearOperatorKronecker(LinearOperator):
             name: Optional name for the operator.
         """
         self.operators = list(operators)
-        mats = [_extract_operator_dense(op) for op in self.operators]
-        t_mat = mats[0] if mats else Tensor([[1.0]])
+        t_mat = self._compute_kronecker_dense()
         super().__init__(
             dtype=t_mat.dtype,
             is_non_singular=is_non_singular,
@@ -802,6 +1599,47 @@ class LinearOperatorKronecker(LinearOperator):
             name=name or "LinearOperatorKronecker",
             matrix=t_mat,
         )
+
+    def _compute_kronecker_dense(self) -> Tensor:
+        """Compute the full Kronecker product across `self.operators`.
+
+        Returns:
+            Tensor: Dense Kronecker product matrix.
+        """
+        mats = [_extract_operator_dense(op) for op in self.operators]
+        if not mats:
+            return Tensor([[1.0]])
+        acc = mats[0]
+        for m in mats[1:]:
+            acc = _kronecker_product_2d(acc, m)
+        return acc
+
+    def _to_dense(self) -> Tensor:
+        """Return the Kronecker product dense matrix.
+
+        Returns:
+            Tensor: Dense Kronecker product matrix.
+        """
+        return self._compute_kronecker_dense()
+
+    def _trace(self) -> Tensor:
+        """Compute trace as the product of traces of each factor operator.
+
+        Returns:
+            Tensor: Trace tensor.
+        """
+        if not self.operators:
+            return Tensor(1.0, dtype=self.dtype)
+        traces = [
+            op.trace()
+            if isinstance(op, LinearOperator)
+            else linalg.trace(_extract_operator_dense(op))
+            for op in self.operators
+        ]
+        acc = _to_tensor(traces[0])
+        for tr in traces[1:]:
+            acc = _msc_ops.multiply(acc, _to_tensor(tr))
+        return _wrap_tensor(acc)
 
 
 class LinearOperatorLowRankUpdate(LinearOperator):
@@ -839,16 +1677,90 @@ class LinearOperatorLowRankUpdate(LinearOperator):
         self.diag_update = diag_update
         self.v = Tensor(u if v is None else v)
         self.is_diag_update_positive = is_diag_update_positive
-        base_mat = _extract_operator_dense(base_operator)
+        t_mat = self._compute_low_rank_dense()
         super().__init__(
-            dtype=base_mat.dtype,
+            dtype=t_mat.dtype,
             is_non_singular=is_non_singular,
             is_self_adjoint=is_self_adjoint,
             is_positive_definite=is_positive_definite,
             is_square=is_square,
             name=name,
-            matrix=base_mat,
+            matrix=t_mat,
         )
+
+    def _compute_low_rank_dense(self) -> Tensor:
+        """Compute `A + U @ D @ V^H`.
+
+        Returns:
+            Tensor: Perturbed dense matrix tensor.
+        """
+        base_mat = _extract_operator_dense(self.base_operator)
+        u_t = self.u
+        v_t = self.v
+        if self.diag_update is not None:
+            d_mat = linalg.diag(Tensor(self.diag_update, dtype=base_mat.dtype))
+            u_t = linalg.matmul(u_t, d_mat)
+        pert = linalg.matmul(u_t, v_t, adjoint_b=True)
+        return _wrap_tensor(_msc_ops.add(_to_tensor(base_mat), _to_tensor(pert)))
+
+    def _to_dense(self) -> Tensor:
+        """Return `A + U D V^H` as a dense `Tensor`.
+
+        Returns:
+            Tensor: Dense matrix tensor.
+        """
+        return self._compute_low_rank_dense()
+
+    def _matmul(
+        self,
+        x: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Compute `(A + U D V^H) @ x` using low-rank associative multiplication.
+
+        Args:
+            x: Right-hand matrix `Tensor`.
+            adjoint: If `True`, multiply by the adjoint.
+            adjoint_arg: If `True`, multiply by the adjoint of `x`.
+
+        Returns:
+            Tensor: Matrix product tensor.
+        """
+        rhs = linalg.adjoint(x) if adjoint_arg else x
+        base_part = (
+            self.base_operator.matmul(rhs, adjoint=adjoint)
+            if isinstance(self.base_operator, LinearOperator)
+            else linalg.matmul(_extract_operator_dense(self.base_operator), rhs, adjoint_a=adjoint)
+        )
+        left_f = self.v if adjoint else self.u
+        right_f = self.u if adjoint else self.v
+        vx = linalg.matmul(right_f, rhs, adjoint_a=True)
+        if self.diag_update is not None:
+            d_col = _ops.expand_dims(_to_tensor(Tensor(self.diag_update, dtype=self.dtype)), -1)
+            vx = _wrap_tensor(_msc_ops.multiply(d_col, _to_tensor(vx)))
+        udvx = linalg.matmul(left_f, vx)
+        return _wrap_tensor(_msc_ops.add(_to_tensor(base_part), _to_tensor(udvx)))
+
+
+def _build_permutation_dense(perm: Tensor, dtype: DType) -> Tensor:
+    """Build a row-permutation matrix `P` where `P[i, perm[i]] = 1`.
+
+    Args:
+        perm: Permutation index tensor.
+        dtype: Target matrix `DType`.
+
+    Returns:
+        Tensor: Dense permutation matrix `Tensor`.
+    """
+    if not perm.shape:
+        return Tensor([[1.0]], dtype=dtype)
+    idx_list = [int(x) for x in _to_1d_floats(perm)]
+    n = len(idx_list)
+    grid: list[list[float]] = [[0.0 for _ in range(n)] for _ in range(n)]
+    for i, c in enumerate(idx_list):
+        grid[i][c % n] = 1.0
+    return Tensor(grid, dtype=dtype)
 
 
 class LinearOperatorPermutation(LinearOperator):
@@ -858,10 +1770,10 @@ class LinearOperatorPermutation(LinearOperator):
         self,
         perm: Tensor | TensorOperand = (0,),
         dtype: DTypeLike = "float32",
-        is_non_singular: bool | None = None,
+        is_non_singular: bool | None = True,
         is_self_adjoint: bool | None = None,
         is_positive_definite: bool | None = None,
-        is_square: bool | None = None,
+        is_square: bool | None = True,
         name: str = "LinearOperatorPermutation",
     ) -> None:
         """Initialize `LinearOperatorPermutation`.
@@ -876,8 +1788,8 @@ class LinearOperatorPermutation(LinearOperator):
             name: Name of the operator.
         """
         self.perm = Tensor(perm, dtype="int32")
-        n = self.perm.shape[-1] if self.perm.shape else 1
         resolved_dtype = to_dtype(dtype)
+        t_mat = _build_permutation_dense(self.perm, resolved_dtype)
         super().__init__(
             dtype=resolved_dtype,
             is_non_singular=is_non_singular,
@@ -885,8 +1797,46 @@ class LinearOperatorPermutation(LinearOperator):
             is_positive_definite=is_positive_definite,
             is_square=is_square,
             name=name,
-            matrix=linalg.eye(n, dtype=resolved_dtype.value),
+            matrix=t_mat,
         )
+
+    def _to_dense(self) -> Tensor:
+        """Return the row-permutation dense matrix.
+
+        Returns:
+            Tensor: Dense permutation matrix tensor.
+        """
+        return _build_permutation_dense(self.perm, self.dtype)
+
+    def _matmul(
+        self,
+        x: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Permute rows of `x` according to `self.perm` (or inverse permutation if `adjoint`).
+
+        Args:
+            x: Right-hand matrix `Tensor`.
+            adjoint: If `True`, apply the inverse permutation `P^T`.
+            adjoint_arg: If `True`, multiply by the adjoint of `x`.
+
+        Returns:
+            Tensor: Permuted matrix tensor.
+        """
+        if not self.perm.shape:
+            return super()._matmul(x, adjoint=adjoint, adjoint_arg=adjoint_arg)
+        rhs = linalg.adjoint(x) if adjoint_arg else x
+        p_idx = _ops.argsort(_to_tensor(self.perm)) if adjoint else _to_tensor(self.perm)
+        return _wrap_tensor(_ops.take(_to_tensor(rhs), p_idx, axis=-2))
+
+    def _log_abs_determinant(self) -> Tensor:
+        """Return `0.0` since permutation matrices have determinant `+-1`.
+
+        Returns:
+            Tensor: Scalar `0.0` tensor.
+        """
+        return Tensor(0.0, dtype=self.dtype)
 
 
 class LinearOperatorScaledIdentity(LinearOperator):
@@ -916,9 +1866,10 @@ class LinearOperatorScaledIdentity(LinearOperator):
             name: Name of the operator.
         """
         del assert_proper_shapes
+        self._num_rows = int(num_rows)
         self.multiplier = Tensor(multiplier)
         dt_str = self.multiplier.dtype.value if self.multiplier.dtype is not None else "float32"
-        t_mat = linalg.eye(num_rows, dtype=dt_str) * self.multiplier
+        t_mat = linalg.eye(self._num_rows, dtype=dt_str) * self.multiplier
         super().__init__(
             dtype=self.multiplier.dtype,
             is_non_singular=is_non_singular,
@@ -928,6 +1879,109 @@ class LinearOperatorScaledIdentity(LinearOperator):
             name=name,
             matrix=t_mat,
         )
+
+    def _to_dense(self) -> Tensor:
+        """Return `multiplier * I`.
+
+        Returns:
+            Tensor: Scaled identity dense matrix.
+        """
+        return linalg.eye(self._num_rows, dtype=self.dtype.value) * self.multiplier
+
+    def _diag_part(self) -> Tensor:
+        """Return vector of length `num_rows` filled with `multiplier`.
+
+        Returns:
+            Tensor: Diagonal vector tensor.
+        """
+        ones_v = _ops.ones((self._num_rows,), dtype=self.dtype.value)
+        return _wrap_tensor(_msc_ops.multiply(ones_v, _to_tensor(self.multiplier)))
+
+    def _trace(self) -> Tensor:
+        """Return `num_rows * multiplier`.
+
+        Returns:
+            Tensor: Trace tensor.
+        """
+        return _wrap_tensor(
+            _msc_ops.multiply(
+                _to_tensor(float(self._num_rows), dtype=self.dtype),
+                _to_tensor(self.multiplier),
+            )
+        )
+
+    def _determinant(self) -> Tensor:
+        """Return `multiplier ** num_rows`.
+
+        Returns:
+            Tensor: Determinant tensor.
+        """
+        return _wrap_tensor(
+            _ops.power(
+                _to_tensor(self.multiplier),
+                _to_tensor(float(self._num_rows), dtype=self.dtype),
+            )
+        )
+
+    def _matmul(
+        self,
+        x: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Multiply `x` by scalar `multiplier`.
+
+        Args:
+            x: Right-hand matrix `Tensor`.
+            adjoint: Unused for real scalar multiplier.
+            adjoint_arg: If `True`, multiply by the adjoint of `x`.
+
+        Returns:
+            Tensor: Scaled matrix tensor.
+        """
+        del adjoint
+        rhs = linalg.adjoint(x) if adjoint_arg else x
+        return _wrap_tensor(_msc_ops.multiply(_to_tensor(self.multiplier), _to_tensor(rhs)))
+
+    def _solve(
+        self,
+        rhs: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Divide `rhs` by scalar `multiplier`.
+
+        Args:
+            rhs: Right-hand side `Tensor`.
+            adjoint: Unused for real scalar multiplier.
+            adjoint_arg: If `True`, solve with the adjoint of `rhs`.
+
+        Returns:
+            Tensor: Solution tensor.
+        """
+        del adjoint
+        b = linalg.adjoint(rhs) if adjoint_arg else rhs
+        return _wrap_tensor(_msc_ops.divide(_to_tensor(b), _to_tensor(self.multiplier)))
+
+
+def _build_toeplitz_dense(col: Tensor, row: Tensor) -> Tensor:
+    """Build a Toeplitz matrix where `T[i, j] = col[i - j]` for `i >= j` and `row[j - i]` for `i < j`.
+
+    Args:
+        col: First column vector `Tensor`.
+        row: First row vector `Tensor`.
+
+    Returns:
+        Tensor: Dense Toeplitz matrix `Tensor`.
+    """
+    c_vals = _to_1d_floats(col)
+    r_vals = _to_1d_floats(row)
+    m = len(c_vals)
+    n = len(r_vals)
+    grid: list[list[float]] = [
+        [c_vals[i - j] if i >= j else r_vals[j - i] for j in range(n)] for i in range(m)
+    ]
+    return Tensor(grid, dtype=col.dtype)
 
 
 class LinearOperatorToeplitz(LinearOperator):
@@ -956,7 +2010,7 @@ class LinearOperatorToeplitz(LinearOperator):
         """
         self.col = Tensor(col)
         self.row = Tensor(row)
-        t_mat = linalg.diag(self.col)
+        t_mat = _build_toeplitz_dense(self.col, self.row)
         super().__init__(
             dtype=t_mat.dtype,
             is_non_singular=is_non_singular,
@@ -966,6 +2020,14 @@ class LinearOperatorToeplitz(LinearOperator):
             name=name,
             matrix=t_mat,
         )
+
+    def _to_dense(self) -> Tensor:
+        """Return the Toeplitz dense matrix.
+
+        Returns:
+            Tensor: Dense Toeplitz matrix tensor.
+        """
+        return _build_toeplitz_dense(self.col, self.row)
 
 
 class LinearOperatorTridiag(LinearOperator):
@@ -1005,6 +2067,17 @@ class LinearOperatorTridiag(LinearOperator):
             matrix=t_mat,
         )
 
+    def _to_dense(self) -> Tensor:
+        """Return the tridiagonal dense matrix.
+
+        Returns:
+            Tensor: Dense tridiagonal matrix tensor.
+        """
+        return linalg._build_tridiagonal_matrix(
+            self.diagonals,
+            diagonals_format=self.diagonals_format,
+        )
+
 
 class LinearOperatorZeros(LinearOperator):
     """`LinearOperator` acting like a zero matrix of shape `[..., num_rows, num_columns]`."""
@@ -1036,10 +2109,17 @@ class LinearOperatorZeros(LinearOperator):
             assert_proper_shapes: Whether to assert proper shapes.
             name: Name of the operator.
         """
-        del batch_shape, assert_proper_shapes
-        cols = num_rows if num_columns is None else num_columns
+        del assert_proper_shapes
+        self._num_rows = int(num_rows)
+        self._num_cols = self._num_rows if num_columns is None else int(num_columns)
+        self._batch_shape: IntTuple = tuple(batch_shape) if batch_shape is not None else ()
         resolved_dtype = to_dtype(dtype)
-        t_mat = _wrap_tensor(_ops.zeros((num_rows, cols), dtype=resolved_dtype.value))
+        t_mat = _wrap_tensor(
+            _ops.zeros(
+                (*self._batch_shape, self._num_rows, self._num_cols),
+                dtype=resolved_dtype.value,
+            )
+        )
         super().__init__(
             dtype=resolved_dtype,
             is_non_singular=is_non_singular,
@@ -1049,6 +2129,94 @@ class LinearOperatorZeros(LinearOperator):
             name=name,
             matrix=t_mat,
         )
+
+    def _to_dense(self) -> Tensor:
+        """Return the zero matrix tensor.
+
+        Returns:
+            Tensor: Zero matrix tensor.
+        """
+        return self._matrix
+
+    def _determinant(self) -> Tensor:
+        """Return `0.0` as the determinant of a zero matrix.
+
+        Returns:
+            Tensor: Zero determinant tensor.
+        """
+        return _wrap_tensor(_ops.zeros(self._batch_shape, dtype=self.dtype.value))
+
+    def _trace(self) -> Tensor:
+        """Return `0.0` as the trace of a zero matrix.
+
+        Returns:
+            Tensor: Zero trace tensor.
+        """
+        return _wrap_tensor(_ops.zeros(self._batch_shape, dtype=self.dtype.value))
+
+    def _matmul(
+        self,
+        x: Tensor,
+        adjoint: bool = False,
+        adjoint_arg: bool = False,
+    ) -> Tensor:
+        """Multiply by zero matrix, returning a zero tensor of appropriate shape.
+
+        Args:
+            x: Right-hand matrix `Tensor`.
+            adjoint: If `True`, transpose dimensions of zero matrix.
+            adjoint_arg: If `True`, transpose `x`.
+
+        Returns:
+            Tensor: Zero product tensor.
+        """
+        rhs = linalg.adjoint(x) if adjoint_arg else x
+        out_rows = self._num_cols if adjoint else self._num_rows
+        out_cols = rhs.shape[-1] if rhs.shape else 1
+        return _wrap_tensor(
+            _ops.zeros((*self._batch_shape, out_rows, out_cols), dtype=self.dtype.value)
+        )
+
+
+def _lu_single_2d(
+    mat_t: Tensor,
+    idx_dtype: str,
+) -> builtins.tuple[Tensor, Tensor]:
+    """Compute partial-pivoting PLU decomposition `P @ A = L @ U` (or `A = P^{-1} L U`) for a 2-D matrix.
+
+    Args:
+        mat_t: 2-D square matrix `Tensor`.
+        idx_dtype: Integer dtype string for permutation vector `p`.
+
+    Returns:
+        tuple[Tensor, Tensor]: `(lu, p)` tensors for the 2-D matrix.
+    """
+    mat = _to_nested_floats(mat_t)
+    n = len(mat)
+    perm = list(range(n))
+    for k in range(n):
+        # Partial pivoting: find row with largest magnitude in column k
+        piv_row = k
+        max_abs = abs(mat[k][k])
+        for r in range(k + 1, n):
+            if abs(mat[r][k]) > max_abs:
+                max_abs = abs(mat[r][k])
+                piv_row = r
+        if piv_row != k:
+            mat[k], mat[piv_row] = mat[piv_row], mat[k]
+            perm[k], perm[piv_row] = perm[piv_row], perm[k]
+        piv = mat[k][k] if abs(mat[k][k]) > 1e-12 else 1.0
+        for i in range(k + 1, n):
+            factor = mat[i][k] / piv
+            mat[i][k] = factor
+            for j in range(k + 1, n):
+                mat[i][j] -= factor * mat[k][j]
+    # TensorFlow's tf.linalg.lu returns `p` such that P @ L @ U = A, where P[i, p[i]] = 1,
+    # i.e. p is the inverse permutation of `perm`.
+    inv_perm = [0] * n
+    for i, p_val in enumerate(perm):
+        inv_perm[p_val] = i
+    return (Tensor(mat, dtype=mat_t.dtype), Tensor(inv_perm, dtype=idx_dtype))
 
 
 class linalg:
@@ -1103,7 +2271,7 @@ class linalg:
         """Copy a tensor setting everything outside a central diagonal band to zero.
 
         Args:
-            input: Input matrix tensor.
+            input: Input matrix tensor of shape `[..., M, N]`.
             num_lower: Number of subdiagonals to keep (negative keeps all).
             num_upper: Number of superdiagonals to keep (negative keeps all).
             name: Optional operation name.
@@ -1162,14 +2330,23 @@ class linalg:
         """Compute the Cholesky decomposition of one or more square matrices.
 
         Args:
-            input: Hermitian positive-definite matrix tensor.
+            input: Hermitian positive-definite matrix tensor of shape `[..., M, M]`.
             name: Optional operation name.
 
         Returns:
             Tensor: Lower-triangular Cholesky factor tensor.
         """
         del name
-        return _wrap_tensor(_ops.cholesky(_to_tensor(input)))
+        t_in = Tensor(input)
+        if _tracer.is_tracing or len(t_in.shape) <= 2:
+            return _wrap_tensor(_ops.cholesky(_to_tensor(t_in)))
+        batch_shape = t_in.shape[:-2]
+        inner_shape = t_in.shape[-2:]
+        slices = [
+            _wrap_tensor(_ops.cholesky(_to_tensor(_slice_batch_matrix(t_in, idx))))
+            for idx in _iter_batch_indices(batch_shape)
+        ]
+        return _stack_batch_results(slices, batch_shape, inner_shape, t_in.dtype)
 
     @staticmethod
     def cholesky_solve(
@@ -1197,15 +2374,15 @@ class linalg:
         b: Tensor | TensorOperand,
         name: str | None = None,
     ) -> Tensor:
-        """Compute the pairwise 3-D cross product of `a` and `b`.
+        """Compute the pairwise 3-D cross product of `a` and `b` across arbitrary batch dimensions.
 
         Args:
-            a: First 3-element vector tensor.
-            b: Second 3-element vector tensor.
+            a: First 3-element vector tensor of shape `[..., 3]`.
+            b: Second 3-element vector tensor of shape `[..., 3]`.
             name: Optional operation name.
 
         Returns:
-            Tensor: Cross product tensor.
+            Tensor: Cross product tensor of shape `[..., 3]`.
         """
         del name
         return _wrap_tensor(_ops.cross(_to_tensor(a), _to_tensor(b)))
@@ -1231,7 +2408,7 @@ class linalg:
     def diag(
         diagonal: Tensor | TensorOperand,
         name: str = "diag",
-        k: int = 0,
+        k: int | builtins.tuple[int, int] = 0,
         num_rows: int = -1,
         num_cols: int = -1,
         padding_value: float = 0,
@@ -1242,42 +2419,113 @@ class linalg:
         Args:
             diagonal: Rank `r` tensor of diagonal values.
             name: Optional operation name.
-            k: Diagonal offset (`0` for main diagonal).
+            k: Diagonal offset (`0` for main diagonal, positive for superdiagonal, negative for subdiagonal).
             num_rows: Number of rows of the output matrix (`-1` infers automatically).
             num_cols: Number of columns of the output matrix (`-1` infers automatically).
             padding_value: Value to fill the area outside the specified diagonal band.
             align: Alignment string for sub-/super-diagonals.
 
         Returns:
-            Tensor: Diagonal matrix tensor.
+            Tensor: Diagonal matrix tensor of shape `[..., M, N]`.
         """
-        del name, num_rows, num_cols, padding_value, align
-        if k == 0:
-            return _wrap_tensor(_ops.diag(_to_tensor(diagonal)))
-        return _wrap_tensor(_ops.diag(_to_tensor(diagonal), k))
+        del name, align
+        k_val = k[0] if isinstance(k, builtins.tuple) else int(k)
+        t_diag = Tensor(diagonal)
+        if _tracer.is_tracing and len(t_diag.shape) <= 1:
+            d_len = t_diag.shape[-1] if t_diag.shape else 1
+            raw_d = _to_tensor(t_diag)
+            eye_m = _msc_ops.eye(d_len, dtype=raw_d.dtype)
+            main_d = _msc_ops.multiply(eye_m, _ops.expand_dims(raw_d, -1))
+            if k_val == 0:
+                return _wrap_tensor(main_d)
+            return linalg.band_part(
+                _ops.roll(main_d, shift=k_val, axis=-1),
+                max(0, -k_val),
+                max(0, k_val),
+            )
+        if len(t_diag.shape) <= 1 and num_rows == -1 and num_cols == -1 and padding_value == 0:
+            if k_val == 0:
+                return _wrap_tensor(_ops.diag(_to_tensor(t_diag)))
+            return _wrap_tensor(_ops.diag(_to_tensor(t_diag), k_val))
+
+        batch_shape = t_diag.shape[:-1]
+        diag_len = t_diag.shape[-1] if t_diag.shape else 1
+        inferred_size = diag_len + abs(k_val)
+        m_rows = inferred_size if num_rows < 0 else num_rows
+        n_cols = inferred_size if num_cols < 0 else num_cols
+
+        slices: list[Tensor] = []
+        for idx in _iter_batch_indices(batch_shape):
+            cur = t_diag
+            for b_i in idx:
+                cur = cur[b_i]
+            vals = _to_1d_floats(cur)
+            grid: list[list[float]] = [
+                [float(padding_value) for _ in range(n_cols)] for _ in range(m_rows)
+            ]
+            r_start = max(0, -k_val)
+            c_start = max(0, k_val)
+            for d_i, v in enumerate(vals):
+                grid[r_start + d_i][c_start + d_i] = v
+            slices.append(Tensor(grid, dtype=t_diag.dtype))
+        if not batch_shape:
+            return slices[0]
+        return _stack_batch_results(slices, batch_shape, (m_rows, n_cols), t_diag.dtype)
 
     @staticmethod
     def diag_part(
         input: Tensor | TensorOperand,
         name: str | None = None,
-        k: int = 0,
+        k: int | builtins.tuple[int, int] = 0,
         padding_value: float = 0.0,
         align: str = "RIGHT_LEFT",
     ) -> Tensor:
         """Extract the diagonal part of a batched matrix tensor.
 
         Args:
-            input: Input matrix tensor.
+            input: Input matrix tensor of shape `[..., M, N]`.
             name: Optional operation name.
-            k: Diagonal offset.
+            k: Diagonal offset (`int` or `(k_low, k_high)` tuple).
             padding_value: Padding value for rectangular diagonals.
             align: Alignment string.
 
         Returns:
-            Tensor: Diagonal vector tensor.
+            Tensor: Extracted diagonal tensor.
         """
-        del name, padding_value, align
-        return _wrap_tensor(as_operand(_msc_ops.tensor_diag_part(_to_tensor(input), offset=k)))
+        del name, align
+        t_in = Tensor(input)
+        if isinstance(k, int) and (_tracer.is_tracing or len(t_in.shape) <= 2):
+            return _wrap_tensor(as_operand(_msc_ops.tensor_diag_part(_to_tensor(t_in), offset=k)))
+
+        batch_shape = t_in.shape[:-2]
+        m_rows = t_in.shape[-2]
+        n_cols = t_in.shape[-1]
+
+        if isinstance(k, builtins.tuple):
+            k_low, k_high = int(k[0]), int(k[1])
+        else:
+            k_low = k_high = int(k)
+
+        max_diag_len = min(m_rows, n_cols)
+        slices: list[Tensor] = []
+        for idx in _iter_batch_indices(batch_shape):
+            mat_2d = _to_nested_floats(_slice_batch_matrix(t_in, idx))
+            band_diags: list[list[float]] = []
+            for offset in range(k_high, k_low - 1, -1):
+                r_start = max(0, -offset)
+                c_start = max(0, offset)
+                d_len = max(0, min(m_rows - r_start, n_cols - c_start))
+                diag_vals = [mat_2d[r_start + d_i][c_start + d_i] for d_i in range(d_len)]
+                if k_low != k_high and len(diag_vals) < max_diag_len:
+                    diag_vals.extend([float(padding_value)] * (max_diag_len - len(diag_vals)))
+                band_diags.append(diag_vals)
+            slices.append(
+                Tensor(band_diags[0] if k_low == k_high else band_diags, dtype=t_in.dtype)
+            )
+
+        if not batch_shape:
+            return slices[0]
+        return _stack_batch_results(slices, batch_shape, slices[0].shape, t_in.dtype)
 
     @staticmethod
     def eig(
@@ -1294,7 +2542,7 @@ class linalg:
             Tensor | tuple[Tensor, ...] | list[Tensor]: Pair `(eigenvalues, eigenvectors)`.
         """
         del name
-        return _wrap(_ops.eigh(_to_tensor(tensor)))
+        return linalg.eigh(tensor)
 
     @staticmethod
     def eigvals(
@@ -1316,18 +2564,33 @@ class linalg:
     def eigh(
         tensor: Tensor | TensorOperand,
         name: str | None = None,
-    ) -> Tensor | builtins.tuple[Tensor, ...] | builtins.list[Tensor]:
+    ) -> builtins.tuple[Tensor, Tensor]:
         """Compute the eigendecomposition of a batch of self-adjoint matrices.
 
         Args:
-            tensor: Self-adjoint matrix tensor.
+            tensor: Self-adjoint matrix tensor of shape `[..., N, N]`.
             name: Optional operation name.
 
         Returns:
-            Tensor | tuple[Tensor, ...] | list[Tensor]: Pair `(eigenvalues, eigenvectors)`.
+            tuple[Tensor, Tensor]: Pair `(eigenvalues, eigenvectors)`.
         """
         del name
-        return _wrap(_ops.eigh(_to_tensor(tensor)))
+        t_in = Tensor(tensor)
+        if _tracer.is_tracing or len(t_in.shape) <= 2:
+            raw_res = _ops.eigh(_to_tensor(t_in))
+            return (_wrap_tensor(raw_res[0]), _wrap_tensor(raw_res[1]))
+        batch_shape = t_in.shape[:-2]
+        n = t_in.shape[-1]
+        val_slices: list[Tensor] = []
+        vec_slices: list[Tensor] = []
+        for idx in _iter_batch_indices(batch_shape):
+            sub_res = _ops.eigh(_to_tensor(_slice_batch_matrix(t_in, idx)))
+            val_slices.append(_wrap_tensor(sub_res[0]))
+            vec_slices.append(_wrap_tensor(sub_res[1]))
+        return (
+            _stack_batch_results(val_slices, batch_shape, (n,), t_in.dtype),
+            _stack_batch_results(vec_slices, batch_shape, (n, n), t_in.dtype),
+        )
 
     @staticmethod
     def eigh_tridiagonal(
@@ -1338,7 +2601,7 @@ class linalg:
         select_range: builtins.tuple[float, float] | None = None,
         tol: float | None = None,
         name: str | None = None,
-    ) -> Tensor | builtins.tuple[Tensor, ...] | builtins.list[Tensor]:
+    ) -> Tensor | builtins.tuple[Tensor, Tensor]:
         """Compute the eigenvalues (and optionally eigenvectors) of a symmetric tridiagonal matrix.
 
         Args:
@@ -1351,7 +2614,7 @@ class linalg:
             name: Optional operation name.
 
         Returns:
-            Tensor | tuple[Tensor, ...] | list[Tensor]: Eigenvalues or `(eigenvalues, eigenvectors)`.
+            Tensor | tuple[Tensor, Tensor]: Eigenvalues or `(eigenvalues, eigenvectors)`.
         """
         del select, select_range, tol, name
         t_alpha = Tensor(alpha)
@@ -1376,16 +2639,15 @@ class linalg:
         """Compute the eigenvalues of one or more self-adjoint matrices.
 
         Args:
-            tensor: Self-adjoint matrix tensor.
+            tensor: Self-adjoint matrix tensor of shape `[..., N, N]`.
             name: Optional operation name.
 
         Returns:
-            Tensor: Eigenvalues tensor.
+            Tensor: Eigenvalues tensor of shape `[..., N]`.
         """
         del name
-        eigh_res = _ops.eigh(_to_tensor(tensor))
-        vals = eigh_res[0] if isinstance(eigh_res, builtins.tuple) and eigh_res else eigh_res
-        return _wrap_tensor(vals)
+        vals, _ = linalg.eigh(tensor)
+        return vals
 
     @staticmethod
     def einsum(
@@ -1403,11 +2665,8 @@ class linalg:
         Returns:
             Tensor: Contracted result tensor.
         """
-        res = _ops.einsum(
-            equation,
-            *[_to_tensor(a) for a in inputs],
-            **_clean_linalg_kwargs(kwargs),
-        )
+        del kwargs
+        res = _ops.einsum(equation, *[_to_tensor(a) for a in inputs])
         return _wrap_tensor(res)
 
     @staticmethod
@@ -1415,17 +2674,26 @@ class linalg:
         input: Tensor | TensorOperand,
         name: str | None = None,
     ) -> Tensor:
-        """Compute the matrix exponential of one or more square matrices.
+        """Compute the matrix exponential of one or more square matrices via scaling and squaring.
 
         Args:
-            input: Square matrix tensor.
+            input: Square matrix tensor of shape `[..., M, M]`.
             name: Optional operation name.
 
         Returns:
-            Tensor: Matrix exponential tensor.
+            Tensor: Matrix exponential tensor of shape `[..., M, M]`.
         """
         del name
-        return _wrap_tensor(as_operand(_msc_ops.expm(_to_tensor(input))))
+        t_in = Tensor(input)
+        if _tracer.is_tracing or len(t_in.shape) <= 2:
+            return _wrap_tensor(as_operand(_msc_ops.expm(_to_tensor(t_in))))
+        batch_shape = t_in.shape[:-2]
+        inner_shape = t_in.shape[-2:]
+        slices = [
+            _wrap_tensor(as_operand(_msc_ops.expm(_to_tensor(_slice_batch_matrix(t_in, idx)))))
+            for idx in _iter_batch_indices(batch_shape)
+        ]
+        return _stack_batch_results(slices, batch_shape, inner_shape, t_in.dtype)
 
     @staticmethod
     def eye(
@@ -1445,13 +2713,28 @@ class linalg:
             name: Optional operation name.
 
         Returns:
-            Tensor: Identity matrix tensor.
+            Tensor: Identity matrix tensor of shape `[*batch_shape, num_rows, num_columns]`.
         """
-        del batch_shape, name
-        resolved_dtype = to_dtype(dtype).value
-        if num_columns is None:
-            return _wrap_tensor(_ops.eye(num_rows, dtype=resolved_dtype))
-        return _wrap_tensor(_ops.eye(num_rows, num_columns, dtype=resolved_dtype))
+        del name
+        resolved_dtype = to_dtype(dtype)
+        cols = num_rows if num_columns is None else num_columns
+        base_eye = (
+            _wrap_tensor(_ops.eye(num_rows, dtype=resolved_dtype.value))
+            if num_columns is None
+            else _wrap_tensor(_ops.eye(num_rows, cols, dtype=resolved_dtype.value))
+        )
+        if not batch_shape:
+            return base_eye
+        b_tuple = tuple(int(d) for d in batch_shape)
+        b_count = 1
+        for d in b_tuple:
+            b_count *= d
+        return _stack_batch_results(
+            [base_eye for _ in range(b_count)],
+            b_tuple,
+            (num_rows, cols),
+            resolved_dtype,
+        )
 
     @staticmethod
     def global_norm(
@@ -1486,7 +2769,7 @@ class linalg:
         """Compute the inverse of one or more square invertible matrices.
 
         Args:
-            input: Square invertible matrix tensor.
+            input: Square invertible matrix tensor of shape `[..., M, M]`.
             adjoint: If `True`, compute the inverse of the conjugate transpose.
             name: Optional operation name.
 
@@ -1494,32 +2777,52 @@ class linalg:
             Tensor: Inverse matrix tensor.
         """
         del name
-        mat = linalg.adjoint(input) if adjoint else input
-        return _wrap_tensor(_ops.inv(_to_tensor(mat)))
+        t_in = linalg.adjoint(input) if adjoint else Tensor(input)
+        if _tracer.is_tracing or len(t_in.shape) <= 2:
+            return _wrap_tensor(_ops.inv(_to_tensor(t_in)))
+        batch_shape = t_in.shape[:-2]
+        inner_shape = t_in.shape[-2:]
+        slices = [
+            _wrap_tensor(_ops.inv(_to_tensor(_slice_batch_matrix(t_in, idx))))
+            for idx in _iter_batch_indices(batch_shape)
+        ]
+        return _stack_batch_results(slices, batch_shape, inner_shape, t_in.dtype)
 
     @staticmethod
     def l2_normalize(
         x: Tensor | TensorOperand,
-        axis: int | builtins.tuple[int, ...] | None = None,
+        axis: int | Sequence[int] | None = None,
         epsilon: float = 1e-12,
         name: str | None = None,
         dim: int | None = None,
     ) -> Tensor:
-        """Normalize along dimension `axis` using an L2 norm.
+        """Normalize along dimension `axis` using an L2 norm with `epsilon` lower bound.
 
         Args:
             x: Input tensor.
             axis: Dimension(s) along which to normalize.
-            epsilon: Lower bound value for the norm.
+            epsilon: Lower bound value for the squared norm.
             name: Optional operation name.
             dim: Deprecated alias for `axis`.
 
         Returns:
             Tensor: L2-normalized tensor.
         """
-        del epsilon, name, dim
-        normed, _ = linalg.normalize(x, axis=axis)
-        return normed
+        del name
+        eff_axis = dim if axis is None else axis
+        t_x = _to_tensor(x)
+        axis_val: int | builtins.tuple[int, ...] | None = (
+            eff_axis
+            if isinstance(eff_axis, int)
+            else (
+                builtins.tuple(int(a) for a in eff_axis)
+                if isinstance(eff_axis, (builtins.list, builtins.tuple))
+                else None
+            )
+        )
+        sq_sum = _to_tensor(_ops.sum(_ops.square(t_x), axis=axis_val, keepdims=True))
+        inv_norm = _ops.rsqrt(_ops.maximum(sq_sum, _to_tensor(epsilon, dtype=t_x.dtype)))
+        return _wrap_tensor(_msc_ops.multiply(t_x, inv_norm))
 
     @staticmethod
     def logdet(
@@ -1563,21 +2866,33 @@ class linalg:
         fast: bool = True,
         name: str | None = None,
     ) -> Tensor:
-        """Solve one or more linear least-squares problems.
+        """Solve one or more linear least-squares problems `(A^T A + l2 * I) X = A^T B`.
 
         Args:
             matrix: Coefficient matrix tensor of shape `[..., M, N]`.
             rhs: Right-hand-side tensor of shape `[..., M, K]`.
             l2_regularizer: L2 regularization scalar weight.
-            fast: Whether to use the fast Cholesky-based solver.
+            fast: Whether to use the fast normal-equations / Cholesky solver.
             name: Optional operation name.
 
         Returns:
-            Tensor: Least-squares solution tensor.
+            Tensor: Least-squares solution tensor of shape `[..., N, K]`.
         """
-        del l2_regularizer, fast, name
-        res = as_operand(_msc_ops.lstsq(_to_tensor(matrix), _to_tensor(rhs)))
-        return _wrap_tensor(res)
+        del fast, name
+        t_mat = Tensor(matrix)
+        t_rhs = Tensor(rhs)
+        if _tracer.is_tracing:
+            return _wrap_tensor(as_operand(_msc_ops.lstsq(_to_tensor(t_mat), _to_tensor(t_rhs))))
+        if l2_regularizer > 0.0:
+            n = t_mat.shape[-1]
+            batch_s = t_mat.shape[:-2] if len(t_mat.shape) > 2 else None
+            reg_eye = linalg.eye(n, batch_shape=batch_s, dtype=t_mat.dtype) * float(l2_regularizer)
+            ata = linalg.matmul(t_mat, t_mat, adjoint_a=True) + reg_eye
+            atb = linalg.matmul(t_mat, t_rhs, adjoint_a=True)
+            return linalg.solve(ata, atb)
+        ata_unreg = linalg.matmul(t_mat, t_mat, adjoint_a=True)
+        atb_unreg = linalg.matmul(t_mat, t_rhs, adjoint_a=True)
+        return linalg.solve(ata_unreg, atb_unreg)
 
     @staticmethod
     def lu(
@@ -1588,7 +2903,7 @@ class linalg:
         """Compute the LU decomposition of one or more square matrices.
 
         Args:
-            input: Square matrix tensor of shape `[N, N]`.
+            input: Square matrix tensor of shape `[..., N, N]`.
             output_idx_type: Optional integer `DType` for permutation indices (`int32` or `int64`).
             name: Optional operation name.
 
@@ -1597,31 +2912,27 @@ class linalg:
         """
         del name
         t_in = Tensor(input)
-        idx_dtype = to_dtype(output_idx_type).value if output_idx_type is not None else "int32"
+        idx_dtype = to_dtype(output_idx_type) if output_idx_type is not None else DType.Int32
         if _tracer.is_tracing or len(t_in.shape) < 2:
             if _tracer.is_tracing:
                 _ = _msc_ops.lu(_to_tensor(t_in))
             return (t_in, Tensor([0], dtype=idx_dtype))
 
-        raw_rows = _ops.convert_to_numpy(_to_tensor(t_in)).tolist()
-        rows_list = raw_rows if isinstance(raw_rows, builtins.list) else [[raw_rows]]
-        n = len(rows_list)
-        mat: list[list[float]] = [
-            [
-                float(c) if isinstance(c, (int, float)) else 0.0
-                for c in (r if isinstance(r, builtins.list) else [r])
-            ]
-            for r in rows_list
-        ]
-        for k in range(n):
-            piv = mat[k][k] if abs(mat[k][k]) > 1e-12 else 1.0
-            for i in range(k + 1, n):
-                factor = mat[i][k] / piv
-                mat[i][k] = factor
-                for j in range(k + 1, n):
-                    mat[i][j] -= factor * mat[k][j]
-        perm = list(range(n))
-        return (Tensor(mat, dtype=t_in.dtype), Tensor(perm, dtype=idx_dtype))
+        if len(t_in.shape) == 2:
+            return _lu_single_2d(t_in, idx_dtype.value)
+
+        batch_shape = t_in.shape[:-2]
+        n = t_in.shape[-1]
+        lu_slices: list[Tensor] = []
+        p_slices: list[Tensor] = []
+        for idx in _iter_batch_indices(batch_shape):
+            lu_2d, p_1d = _lu_single_2d(_slice_batch_matrix(t_in, idx), idx_dtype.value)
+            lu_slices.append(lu_2d)
+            p_slices.append(p_1d)
+        return (
+            _stack_batch_results(lu_slices, batch_shape, (n, n), t_in.dtype),
+            _stack_batch_results(p_slices, batch_shape, (n,), idx_dtype),
+        )
 
     @staticmethod
     def lu_reconstruct(
@@ -1655,8 +2966,7 @@ class linalg:
         )
         u_mat = _to_tensor(linalg.band_part(t_lu, 0, -1))
         prod = _ops.matmul(_to_tensor(l_mat), u_mat)
-        inv_perm = _ops.argsort(_to_tensor(perm))
-        return _wrap_tensor(_ops.take(prod, inv_perm, axis=0))
+        return _wrap_tensor(_ops.take(prod, _to_tensor(perm), axis=0))
 
     @staticmethod
     def lu_matrix_inverse(
@@ -1824,7 +3134,7 @@ class linalg:
     def norm(
         tensor: Tensor | TensorOperand,
         ord: str | int | float = "euclidean",
-        axis: int | builtins.tuple[int, ...] | None = None,
+        axis: int | Sequence[int] | None = None,
         keepdims: bool | None = None,
         name: str | None = None,
     ) -> Tensor:
@@ -1841,22 +3151,40 @@ class linalg:
             Tensor: Norm tensor.
         """
         del name
-        ord_val: int | float | str | None = None if ord == "euclidean" else ord
-        kw: dict[str, int | float | bool | str | None] = {}
-        if ord_val is not None:
-            kw["ord"] = ord_val
-        if isinstance(axis, int):
-            kw["axis"] = axis
-        if keepdims is not None:
-            kw["keepdims"] = keepdims
-        res = _ops.norm(_to_tensor(tensor), **kw)
+        t_in = _to_tensor(tensor)
+        axis_val: int | builtins.tuple[int, ...] | None = (
+            axis
+            if isinstance(axis, int)
+            else (
+                builtins.tuple(int(x) for x in axis)
+                if isinstance(axis, (builtins.list, builtins.tuple))
+                else None
+            )
+        )
+        kd_val = builtins.bool(keepdims)
+        if ord in ("euclidean", "fro", 2, 2.0):
+            res = _ops.sqrt(_to_tensor(_ops.sum(_ops.square(t_in), axis=axis_val, keepdims=kd_val)))
+        elif ord in (1, 1.0):
+            res = _to_tensor(_ops.sum(_ops.abs(t_in), axis=axis_val, keepdims=kd_val))
+        elif ord == float("inf") or ord == "inf":
+            res = _to_tensor(_ops.max(_ops.abs(t_in), axis=axis_val, keepdims=kd_val))
+        elif ord == float("-inf") or ord == "-inf":
+            res = _to_tensor(_ops.min(_ops.abs(t_in), axis=axis_val, keepdims=kd_val))
+        else:
+            p_f = float(ord)
+            p_t = _to_tensor(p_f, dtype=t_in.dtype)
+            inv_p_t = _to_tensor(1.0 / p_f, dtype=t_in.dtype)
+            sum_p = _to_tensor(
+                _ops.sum(_ops.power(_ops.abs(t_in), p_t), axis=axis_val, keepdims=kd_val)
+            )
+            res = _ops.power(sum_p, inv_p_t)
         return _wrap_tensor(res)
 
     @staticmethod
     def normalize(
         tensor: Tensor | TensorOperand,
         ord: str | int | float = "euclidean",
-        axis: int | builtins.tuple[int, ...] | None = None,
+        axis: int | Sequence[int] | None = None,
         name: str | None = None,
     ) -> builtins.tuple[Tensor, Tensor]:
         """Normalize `tensor` along dimension `axis` using specified norm `ord`.
@@ -1870,9 +3198,9 @@ class linalg:
         Returns:
             tuple[Tensor, Tensor]: Pair `(normalized, norm)` of normalized tensor and norm.
         """
-        del ord, axis, name
+        del name
         t_in = Tensor(tensor)
-        n_val = linalg.norm(t_in)
+        n_val = linalg.norm(t_in, ord=ord, axis=axis, keepdims=axis is not None)
         return (t_in / n_val, n_val)
 
     @staticmethod
@@ -1901,45 +3229,100 @@ class linalg:
         input: Tensor | TensorOperand,
         full_matrices: bool = False,
         name: str | None = None,
-    ) -> Tensor | builtins.tuple[Tensor, ...] | builtins.list[Tensor]:
+    ) -> builtins.tuple[Tensor, Tensor]:
         """Compute the QR decomposition of one or more matrices.
 
         Args:
             input: Matrix tensor of shape `[..., M, N]`.
-            full_matrices: If `True`, compute full-sized `Q` and `R`.
+            full_matrices: If `True`, compute full-sized `Q` (`[..., M, M]`) and `R` (`[..., M, N]`).
             name: Optional operation name.
 
         Returns:
-            Tensor | tuple[Tensor, ...] | list[Tensor]: Pair `(q, r)` of orthogonal and upper-triangular factors.
+            tuple[Tensor, Tensor]: Pair `(q, r)` of orthogonal and upper-triangular factors.
         """
-        del full_matrices, name
-        return _wrap(_ops.qr(_to_tensor(input)))
+        del name
+        t_in = Tensor(input)
+        mode_str = "complete" if full_matrices else "reduced"
+        if _tracer.is_tracing or len(t_in.shape) <= 2:
+            q_raw, r_raw = _ops.qr(_to_tensor(t_in), mode=mode_str)
+            return (_wrap_tensor(q_raw), _wrap_tensor(r_raw))
+        batch_shape = t_in.shape[:-2]
+        m, n = t_in.shape[-2], t_in.shape[-1]
+        k = m if full_matrices else min(m, n)
+        q_slices: list[Tensor] = []
+        r_slices: list[Tensor] = []
+        for idx in _iter_batch_indices(batch_shape):
+            q_s, r_s = _ops.qr(_to_tensor(_slice_batch_matrix(t_in, idx)), mode=mode_str)
+            q_slices.append(_wrap_tensor(q_s))
+            r_slices.append(_wrap_tensor(r_s))
+        return (
+            _stack_batch_results(q_slices, batch_shape, (m, k), t_in.dtype),
+            _stack_batch_results(r_slices, batch_shape, (k, n), t_in.dtype),
+        )
 
     @staticmethod
     def set_diag(
         input: Tensor | TensorOperand,
         diagonal: Tensor | TensorOperand,
         name: str = "set_diag",
-        k: int = 0,
+        k: int | builtins.tuple[int, int] = 0,
         align: str = "RIGHT_LEFT",
     ) -> Tensor:
         """Return a batched matrix tensor with new batched diagonal values.
 
         Args:
-            input: Input matrix tensor.
+            input: Input matrix tensor of shape `[..., M, N]`.
             diagonal: Replacement diagonal values tensor.
             name: Optional operation name.
-            k: Diagonal offset.
+            k: Diagonal offset (`int` or `(k_low, k_high)` tuple).
             align: Alignment string.
 
         Returns:
-            Tensor: Matrix tensor with updated diagonal.
+            Tensor: Matrix tensor with updated diagonal(s).
         """
-        del name, k, align
-        t_in = _to_tensor(input)
-        old_diag = _ops.diag(_to_tensor(as_operand(_msc_ops.tensor_diag_part(t_in))))
-        new_diag = _ops.diag(_to_tensor(diagonal, dtype=t_in.dtype))
-        return _wrap_tensor(_msc_ops.add(_msc_ops.subtract(t_in, old_diag), new_diag))
+        del name, align
+        t_in = Tensor(input)
+        t_diag = Tensor(diagonal, dtype=t_in.dtype)
+        if _tracer.is_tracing and isinstance(k, int) and k == 0 and len(t_in.shape) <= 2:
+            raw_in = _to_tensor(t_in)
+            old_diag = _to_tensor(
+                linalg.diag(_wrap_tensor(as_operand(_msc_ops.tensor_diag_part(raw_in))))
+            )
+            new_diag = _to_tensor(linalg.diag(t_diag))
+            return _wrap_tensor(_msc_ops.add(_msc_ops.subtract(raw_in, old_diag), new_diag))
+
+        batch_shape = t_in.shape[:-2]
+        m_rows = t_in.shape[-2]
+        n_cols = t_in.shape[-1]
+        if isinstance(k, builtins.tuple):
+            k_low, k_high = int(k[0]), int(k[1])
+        else:
+            k_low = k_high = int(k)
+
+        slices: list[Tensor] = []
+        for idx in _iter_batch_indices(batch_shape):
+            mat_2d = _to_nested_floats(_slice_batch_matrix(t_in, idx))
+            diag_slice = t_diag
+            for b_i in idx:
+                diag_slice = diag_slice[b_i]
+            if k_low == k_high:
+                vals = _to_1d_floats(diag_slice)
+                r_start = max(0, -k_low)
+                c_start = max(0, k_low)
+                for d_i, v in enumerate(vals):
+                    mat_2d[r_start + d_i][c_start + d_i] = v
+            else:
+                band_rows = _to_nested_floats(diag_slice)
+                for band_idx, offset in enumerate(range(k_high, k_low - 1, -1)):
+                    r_start = max(0, -offset)
+                    c_start = max(0, offset)
+                    max_d = min(m_rows - r_start, n_cols - c_start, len(band_rows[band_idx]))
+                    for d_i in range(max_d):
+                        mat_2d[r_start + d_i][c_start + d_i] = band_rows[band_idx][d_i]
+            slices.append(Tensor(mat_2d, dtype=t_in.dtype))
+        if not batch_shape:
+            return slices[0]
+        return _stack_batch_results(slices, batch_shape, (m_rows, n_cols), t_in.dtype)
 
     @staticmethod
     def slogdet(
@@ -1968,43 +3351,76 @@ class linalg:
         """Solve systems of linear equations `matrix @ X = rhs`.
 
         Args:
-            matrix: Square invertible matrix tensor.
-            rhs: Right-hand-side tensor.
+            matrix: Square invertible matrix tensor of shape `[..., M, M]`.
+            rhs: Right-hand-side tensor of shape `[..., M, K]`.
             adjoint: If `True`, solve with the conjugate transpose of `matrix`.
             name: Optional operation name.
 
         Returns:
-            Tensor: Solution tensor `X`.
+            Tensor: Solution tensor `X` of shape `[..., M, K]`.
         """
         del name
-        lhs = linalg.adjoint(matrix) if adjoint else matrix
-        target_rhs = matrix if rhs is None else rhs
-        res = _ops.solve(_to_tensor(lhs), _to_tensor(target_rhs))
-        return _wrap_tensor(res)
+        t_lhs = linalg.adjoint(matrix) if adjoint else Tensor(matrix)
+        t_rhs = t_lhs if rhs is None else Tensor(rhs, dtype=t_lhs.dtype)
+        if _tracer.is_tracing or len(t_lhs.shape) <= 2:
+            res = _ops.solve(_to_tensor(t_lhs), _to_tensor(t_rhs))
+            return _wrap_tensor(res)
+        batch_shape = t_lhs.shape[:-2]
+        out_inner = t_rhs.shape[-2:]
+        slices = [
+            _wrap_tensor(
+                _ops.solve(
+                    _to_tensor(_slice_batch_matrix(t_lhs, idx)),
+                    _to_tensor(_slice_batch_matrix(t_rhs, idx)),
+                )
+            )
+            for idx in _iter_batch_indices(batch_shape)
+        ]
+        return _stack_batch_results(slices, batch_shape, out_inner, t_lhs.dtype)
 
     @staticmethod
     def sqrtm(
         input: Tensor | TensorOperand,
         name: str | None = None,
     ) -> Tensor:
-        """Compute the matrix square root of one or more square matrices.
+        """Compute the matrix square root of one or more square matrices via Denman-Beavers / spectral iteration.
 
         Args:
-            input: Square matrix tensor.
+            input: Square matrix tensor of shape `[..., M, M]`.
             name: Optional operation name.
 
         Returns:
-            Tensor: Matrix square root tensor.
+            Tensor: Matrix square root tensor `S` such that `S @ S == input`.
         """
         del name
-        t_a = _to_tensor(input)
-        vals, vecs = _ops.eigh(t_a)
-        sqrt_vals = _ops.sqrt(_ops.maximum(vals, _to_tensor(0.0)))
-        prod = _ops.matmul(
-            _ops.matmul(vecs, _ops.diag(sqrt_vals)),
-            _to_tensor(as_operand(_msc_ops.adjoint(vecs))),
-        )
-        return _wrap_tensor(prod)
+        t_in = Tensor(input)
+
+        def _sqrtm_2d(mat_2d: Tensor) -> Tensor:
+            """Compute matrix square root of a 2-D matrix.
+
+            Args:
+                mat_2d: 2-D square matrix `Tensor`.
+
+            Returns:
+                Tensor: 2-D matrix square root `Tensor`.
+            """
+            t_a = _to_tensor(mat_2d)
+            vals, vecs = _ops.eigh(t_a)
+            sqrt_vals = _ops.sqrt(_ops.maximum(vals, _to_tensor(0.0, dtype=mat_2d.dtype)))
+            prod = _ops.matmul(
+                _ops.matmul(vecs, _ops.diag(sqrt_vals)),
+                _to_tensor(as_operand(_msc_ops.adjoint(vecs))),
+            )
+            return _wrap_tensor(prod)
+
+        if _tracer.is_tracing or len(t_in.shape) <= 2:
+            return _sqrtm_2d(t_in)
+        batch_shape = t_in.shape[:-2]
+        inner_shape = t_in.shape[-2:]
+        slices = [
+            _sqrtm_2d(_slice_batch_matrix(t_in, idx)) for idx in _iter_batch_indices(batch_shape)
+        ]
+        return _stack_batch_results(slices, batch_shape, inner_shape, t_in.dtype)
 
     @staticmethod
     def svd(
@@ -2012,21 +3428,60 @@ class linalg:
         full_matrices: bool = False,
         compute_uv: bool = True,
         name: str | None = None,
-    ) -> Tensor | builtins.tuple[Tensor, ...] | builtins.list[Tensor]:
+    ) -> Tensor | builtins.tuple[Tensor, ...]:
         """Compute the singular value decompositions of one or more matrices.
 
         Args:
-            tensor: Matrix tensor.
+            tensor: Matrix tensor of shape `[..., M, N]`.
             full_matrices: If `True`, compute full-sized `u` and `v`.
-            compute_uv: If `True`, compute left and right singular vectors.
+            compute_uv: If `True`, compute left and right singular vectors `(s, u, v)`.
             name: Optional operation name.
 
         Returns:
-            Tensor | tuple[Tensor, ...] | list[Tensor]: Singular values or `(s, u, v)`.
+            Tensor | tuple[Tensor, ...]: Singular values `s` or `(s, u, v)`.
         """
         del name
-        res = _ops.svd(_to_tensor(tensor), full_matrices=full_matrices, compute_uv=compute_uv)
-        return _wrap(res)
+        t_in = Tensor(tensor)
+        if _tracer.is_tracing or len(t_in.shape) <= 2:
+            res = _ops.svd(_to_tensor(t_in), full_matrices=full_matrices, compute_uv=compute_uv)
+            if not compute_uv:
+                return _wrap_tensor(res)
+            u_raw, s_raw, v_raw = res[0], res[1], res[2]
+            # TensorFlow's tf.linalg.svd returns (s, u, v) where A = u @ diag(s) @ v^T
+            return (
+                _wrap_tensor(s_raw),
+                _wrap_tensor(u_raw),
+                linalg.adjoint(_wrap_tensor(v_raw)),
+            )
+
+        batch_shape = t_in.shape[:-2]
+        m, n = t_in.shape[-2], t_in.shape[-1]
+        k = min(m, n)
+        s_slices: list[Tensor] = []
+        u_slices: list[Tensor] = []
+        v_slices: list[Tensor] = []
+        for idx in _iter_batch_indices(batch_shape):
+            sub = _ops.svd(
+                _to_tensor(_slice_batch_matrix(t_in, idx)),
+                full_matrices=full_matrices,
+                compute_uv=compute_uv,
+            )
+            if not compute_uv:
+                s_slices.append(_wrap_tensor(sub))
+            else:
+                s_slices.append(_wrap_tensor(sub[1]))
+                u_slices.append(_wrap_tensor(sub[0]))
+                v_slices.append(linalg.adjoint(_wrap_tensor(sub[2])))
+        s_batched = _stack_batch_results(s_slices, batch_shape, (k,), t_in.dtype)
+        if not compute_uv:
+            return s_batched
+        u_inner = (m, m) if full_matrices else (m, k)
+        v_inner = (n, n) if full_matrices else (n, k)
+        return (
+            s_batched,
+            _stack_batch_results(u_slices, batch_shape, u_inner, t_in.dtype),
+            _stack_batch_results(v_slices, batch_shape, v_inner, t_in.dtype),
+        )
 
     @staticmethod
     def tensor_diag(
@@ -2089,17 +3544,21 @@ class linalg:
         x: Tensor | TensorOperand,
         name: str | None = None,
     ) -> Tensor:
-        """Compute the trace of a matrix `x` (sum along the main diagonal).
+        """Compute the trace of a [batch of] matrix `x` (sum along the main diagonal).
 
         Args:
-            x: Input matrix tensor.
+            x: Input matrix tensor of shape `[..., M, N]`.
             name: Optional operation name.
 
         Returns:
-            Tensor: Trace tensor.
+            Tensor: Trace tensor of shape `[...]`.
         """
         del name
-        return _wrap_tensor(_ops.trace(_to_tensor(x)))
+        t_x = Tensor(x)
+        if _tracer.is_tracing or len(t_x.shape) <= 2:
+            return _wrap_tensor(_ops.trace(_to_tensor(t_x)))
+        diag_v = linalg.diag_part(t_x)
+        return _wrap_tensor(_ops.sum(_to_tensor(diag_v), axis=-1))
 
     @staticmethod
     def triangular_solve(
@@ -2112,26 +3571,45 @@ class linalg:
         """Solve systems of linear equations with lower or upper triangular matrices.
 
         Args:
-            matrix: Triangular coefficient matrix tensor.
-            rhs: Right-hand side tensor.
+            matrix: Triangular coefficient matrix tensor of shape `[..., M, M]`.
+            rhs: Right-hand side tensor of shape `[..., M, K]`.
             lower: If `True`, `matrix` is lower triangular; otherwise upper triangular.
             adjoint: If `True`, solve with the conjugate transpose of `matrix`.
             name: Optional operation name.
 
         Returns:
-            Tensor: Solution tensor.
+            Tensor: Solution tensor of shape `[..., M, K]`.
         """
         del name
-        return _wrap_tensor(
-            as_operand(
-                _msc_ops.triangular_solve(
-                    _to_tensor(matrix),
-                    _to_tensor(rhs),
-                    lower=lower,
-                    adjoint=adjoint,
+        t_mat = Tensor(matrix)
+        t_rhs = Tensor(rhs, dtype=t_mat.dtype)
+        if _tracer.is_tracing or len(t_mat.shape) <= 2:
+            return _wrap_tensor(
+                as_operand(
+                    _msc_ops.triangular_solve(
+                        _to_tensor(t_mat),
+                        _to_tensor(t_rhs),
+                        lower=lower,
+                        adjoint=adjoint,
+                    )
                 )
             )
-        )
+        batch_shape = t_mat.shape[:-2]
+        out_inner = t_rhs.shape[-2:]
+        slices = [
+            _wrap_tensor(
+                as_operand(
+                    _msc_ops.triangular_solve(
+                        _to_tensor(_slice_batch_matrix(t_mat, idx)),
+                        _to_tensor(_slice_batch_matrix(t_rhs, idx)),
+                        lower=lower,
+                        adjoint=adjoint,
+                    )
+                )
+            )
+            for idx in _iter_batch_indices(batch_shape)
+        ]
+        return _stack_batch_results(slices, batch_shape, out_inner, t_mat.dtype)
 
     @staticmethod
     def _build_tridiagonal_matrix(

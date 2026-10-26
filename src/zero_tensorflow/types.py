@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import builtins
 from collections.abc import Sequence
 
 from zero_tensorflow._typing import TensorOperand
@@ -23,7 +22,7 @@ class _BaseTraceType:
         self.args = args
         self.kwargs = kwargs
 
-    def is_subtype_of(self, other: builtins.object) -> bool:
+    def is_subtype_of(self, other: _BaseTraceType | TensorOperand) -> bool:
         """Return whether `self` is a subtype of `other`.
 
         Args:

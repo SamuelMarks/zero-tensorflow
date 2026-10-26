@@ -69,13 +69,21 @@ def test_tensor_extended_methods_and_operators() -> None:
     # Indexing and slicing
     debugging.assert_near(t_mat[0], [1.0, 2.0])
     debugging.assert_near(t_mat[0:1, 1], [2.0])
+    debugging.assert_near(t_mat[..., 1], [2.0, 4.0])
+    debugging.assert_near(t_mat[Tensor(1)], [3.0, 4.0])
+    debugging.assert_near(t_mat[Tensor([0, 1])], [1.0, 2.0])
+    debugging.assert_near(t_mat[:, ::-1], [[2.0, 1.0], [4.0, 3.0]])
     assert t_mat[None, 0].shape == (1, 2)
+    assert t_mat.tolist() == [[1.0, 2.0], [3.0, 4.0]]
     t_scalar = Tensor(5.0)
+    assert t_scalar.tolist() == 5.0
     assert t_scalar[0].numpy() == 5.0
 
     # Boolean mask indexing
     mask_1d = Tensor([True, False], dtype="bool")
     debugging.assert_near(Tensor([10.0, 20.0])[mask_1d], [10.0])
+    mask_1d_empty = Tensor([False, False], dtype="bool")
+    assert Tensor([10.0, 20.0])[mask_1d_empty].shape == (0,)
     mask_2d = Tensor([[True, False], [False, True]], dtype="bool")
     debugging.assert_near(t_mat[mask_2d], [1.0, 4.0])
     assert t_scalar[Tensor(True, dtype="bool")].numpy() == [5.0]
@@ -179,7 +187,11 @@ def test_to_tensor_invalid_dtype() -> None:
     class int16:  # noqa: N801
         """Custom class whose lowercase name matches a DType alias."""
 
+    class UnknownDTypeClass:
+        """Custom class whose name does not match any DType alias."""
+
     assert to_dtype(None) == DType.Float32
+    assert to_dtype(tf.float32) == DType.Float32
     assert to_dtype(DType.Int64) == DType.Int64
     assert to_dtype("float64") == DType.Float64
     assert to_dtype("INT32") == DType.Int32
@@ -195,6 +207,9 @@ def test_to_tensor_invalid_dtype() -> None:
         to_dtype("not_a_valid_dtype")
 
     with pytest.raises(TypeError, match="Cannot convert"):
+        to_dtype(UnknownDTypeClass)
+
+    with pytest.raises(TypeError, match="Cannot convert"):
         to_dtype([1, 2, 3])
 
 
@@ -206,6 +221,8 @@ def test_compiler_ops_missing_coverage() -> None:
         dtype="float32",
         synchronization="ON_WRITE",
         aggregation="SUM",
+        constraint=lambda t: t,
+        shape=(3,),
     )
     assert v.name == "weights"
     assert v.dtype == DType.Float32
@@ -214,6 +231,7 @@ def test_compiler_ops_missing_coverage() -> None:
     assert v.trainable is False
     assert v.synchronization == "ON_WRITE"
     assert v.aggregation == "SUM"
+    assert v.constraint is not None
 
     snap = v.read_value()
     assert isinstance(snap, Tensor)
@@ -238,7 +256,33 @@ def test_compiler_ops_missing_coverage() -> None:
     gathered = v.sparse_read([0, 2])
     debugging.assert_near(gathered, [1.0, 3.0])
 
+    @tf.function
+    def traced_mutate() -> Tensor:
+        """Record variable mutations inside a traced `@tf.function` graph.
+
+        Returns:
+            Tensor: Updated variable snapshot.
+        """
+        v.assign([2.0, 3.0, 4.0])
+        v.assign_add([1.0, 1.0, 1.0])
+        v.assign_sub([1.0, 1.0, 1.0])
+        return v.read_value()
+
+    debugging.assert_near(traced_mutate(), [2.0, 3.0, 4.0])
+
     # Exercise runtime-checkable protocols in _typing.py
     assert isinstance(v, zt_typing.TrackableProtocol)
     assert isinstance(tf.ragged.RaggedTensor([[1]]), zt_typing.RaggedTensorProtocol)
     assert isinstance(tf.sparse.from_dense([[1.0]]), zt_typing.SparseTensorProtocol)
+    assert zt_typing.ensure_tensor_compatible(42) == 42
+    assert zt_typing.ensure_tensor_compatible([1, 2]) == [1, 2]
+    with pytest.raises(TypeError, match="not TensorCompatible"):
+        zt_typing.ensure_tensor_compatible({"a": 1})
+    assert zt_typing.ensure_scalar("abc") == "abc"
+    with pytest.raises(TypeError, match="Expected scalar value"):
+        zt_typing.ensure_scalar([1])
+    assert zt_typing.ensure_shape_tuple(None) == ()
+    assert zt_typing.ensure_shape_tuple(4) == (4,)
+    assert zt_typing.ensure_shape_tuple([2, None]) == (2, None)
+    assert zt_typing.ensure_shape_tuple("invalid") == ()
+    tf.core_tensor._ModuleTrackerProtocol()._register_variable(v)

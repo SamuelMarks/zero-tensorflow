@@ -36,3 +36,33 @@ class BackpropTest(TensorFlowTestCase):
         grads = g.gradient(y, [x])
         assert isinstance(grads, list) and grads[0] is not None
         self.assertEqual(self.evaluate(grads[0]), 6.0)
+
+    def testHigherOrderAndJacobians(self) -> None:
+        """Verify nested `GradientTape`, `jacobian`, and `batch_jacobian`."""
+        x = tf.Tensor(3.0)
+        with tf.GradientTape() as outer:
+            outer.watch(x)
+            with tf.GradientTape() as inner:
+                inner.watch(x)
+                y = x * x * x
+            dy_dx = inner.gradient(y, x)
+            assert isinstance(dy_dx, tf.Tensor)
+        d2y_dx2 = outer.gradient(dy_dx, x)
+        assert isinstance(d2y_dx2, tf.Tensor)
+        self.assertAllClose(d2y_dx2, 18.0)
+
+        vec = tf.Tensor([2.0, 3.0])
+        with tf.GradientTape() as jtape:
+            jtape.watch(vec)
+            vec_sq = vec * vec
+        jac = jtape.jacobian(vec_sq, vec)
+        assert isinstance(jac, tf.Tensor)
+        self.assertAllClose(jac, [[4.0, 0.0], [0.0, 6.0]])
+
+        b_vec = tf.Tensor([[1.0, 2.0], [3.0, 4.0]])
+        with tf.GradientTape() as bjtape:
+            bjtape.watch(b_vec)
+            b_sq = b_vec * b_vec
+        bjac = bjtape.batch_jacobian(b_sq, b_vec)
+        assert isinstance(bjac, tf.Tensor)
+        self.assertEqual(bjac.shape, (2, 2, 2))

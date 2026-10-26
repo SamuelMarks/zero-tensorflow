@@ -21,12 +21,10 @@ jobs:
 
     - name: Checkout Ecosystem Sibling Repositories
       run: |
-        git clone --depth 1 https://github.com/SamuelMarks/ml-switcheroo-ir.git ../ml-switcheroo-ir
-        git clone --depth 1 https://github.com/SamuelMarks/ml-switcheroo-compiler.git ../ml-switcheroo-compiler
         git clone --depth 1 https://github.com/SamuelMarks/zero-keras.git ../zero-keras
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: '3.11'
 
@@ -35,11 +33,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install build pytest pytest-cov ruff mypy interrogate
         pip install "ml-ecosystem-snapshots @ https://github.com/SamuelMarks/ml-ecosystem-snapshots/releases/download/v0.0.5/ml_ecosystem_snapshots-0.0.5-py3-none-any.whl"
+        pip install "ml-switcheroo-ir @ https://github.com/SamuelMarks/ml-switcheroo-ir/releases/download/v0.0.4/ml_switcheroo_ir-0.0.4-py3-none-any.whl"
+        pip install "ml-switcheroo-compiler @ https://github.com/SamuelMarks/ml-switcheroo-compiler/releases/download/v0.0.1/ml_switcheroo_compiler-0.0.1-py3-none-any.whl"
         mkdir -p ~/.cache/ml_ecosystem_snapshots
         curl -sL "https://github.com/SamuelMarks/ml-ecosystem-snapshots/releases/download/v0.0.5/tensorflow_v2.21.0.json" -o ~/.cache/ml_ecosystem_snapshots/tensorflow_v2.21.0.json
         pip install -r requirements-test.txt
-        pip install -e ../ml-switcheroo-ir
-        pip install -e ../ml-switcheroo-compiler
         pip install -e ../zero-keras
         pip install -e .
 

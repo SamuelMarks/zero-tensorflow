@@ -42,6 +42,7 @@ def test_wrap_and_to_tensor_branches() -> None:
     assert t_none.shape == ()
     assert t_none.dtype is None
     assert t_none.numpy() is None
+    assert t_none.tolist() is None
 
     prev_tr = _tracer.is_tracing
     prev_gr = _tracer.active_graph
@@ -89,6 +90,12 @@ def test_wrap_and_to_tensor_branches() -> None:
         _tracer.active_graph = g
         traced_const = Tensor(_to_tensor(Tensor(7.0)))
         assert traced_const.numpy() == 7.0
+        traced_sum = traced_const + Tensor(3.0)
+        assert traced_sum.numpy() == 10.0
+        n_empty = LogicalNode(id="empty_inputs_relu", op_type="Relu")
+        g.nodes["empty_inputs_relu"] = n_empty
+        with pytest.raises(ValueError, match="Cannot call array conversion on a traced tensor"):
+            Tensor(_traced_node=n_empty).numpy()
         unknown_pt = ProxyTensor(id="missing_id", shape=(), dtype="float32")
         t_unknown = Tensor(
             ml_switcheroo_compiler.Tensor(

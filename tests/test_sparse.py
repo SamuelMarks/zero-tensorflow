@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from zero_tensorflow import Tensor, debugging
+from zero_tensorflow import Tensor, debugging, sparse
 from zero_tensorflow.sparse import (
     SparseTensor,
     _extract_values,
@@ -91,3 +91,58 @@ def test_sparse() -> None:
     assert _to_scalar_list(Tensor([1.0, 2.0])) == [1.0, 2.0]
     assert _to_scalar_list(3.5) == [3.5]
     assert _to_scalar_list("bad") == []
+    assert SparseTensor([[0, 0]], [1.0], [1, 1]).dtype.value == "float32"
+
+    bc = sparse.bincount([1, 1, 2], minlength=4, maxlength=3, binary_output=False)
+    debugging.assert_near(to_dense(bc), [0.0, 2.0, 1.0, 0.0])
+    assert sparse.cross([[[1, 2]], [[3]]]).shape == (1, 2)
+    assert sparse.cross([]).shape == (0, 0)
+    assert sparse.cross_hashed([[[1]], [[2]]], num_buckets=10).shape == (1, 1)
+    assert sparse.expand_dims(sp, axis=0).shape == (1, 2, 2)
+    assert sparse.expand_dims(sp, axis=-1).shape == (2, 2, 1)
+    debugging.assert_near(to_dense(sparse.eye(2)), [[1.0, 0.0], [0.0, 1.0]])
+    sp_gap = SparseTensor([[0, 0], [2, 1]], Tensor([1.0, 5.0]), [3, 2])
+    filled_sp, emp_ind = sparse.fill_empty_rows(sp_gap, default_value=9.0)
+    assert filled_sp.shape == (3, 2)
+    debugging.assert_equal(emp_ind, [False, True, False])
+    mapped_sp = sparse.map_values(lambda v: Tensor(v) * 3.0, sp)
+    debugging.assert_near(mapped_sp.values, [3.0, 6.0])
+    assert sparse.map_values(lambda v: Tensor(v) * 2.0, Tensor([1.0, 2.0])).shape == (2,)
+    masked_sp = sparse.mask(sp, [0])
+    assert masked_sp.indices == [[1, 1]]
+    debugging.assert_near(
+        to_dense(sparse.maximum(sp, from_dense([[0.0, 3.0], [0.0, 1.0]]))), [[1.0, 3.0], [0.0, 2.0]]
+    )
+    debugging.assert_near(
+        to_dense(sparse.minimum(sp, from_dense([[0.5, 3.0], [0.0, 1.0]]))), [[0.5, 0.0], [0.0, 1.0]]
+    )
+    debugging.assert_near(sparse.reduce_max(sp, axis=0), [1.0, 2.0])
+    assert isinstance(sparse.reduce_max(sp, axis=[0, 1], output_is_sparse=True), SparseTensor)
+    debugging.assert_near(sparse.reduce_sum(sp, axis=1), [1.0, 2.0])
+    assert isinstance(sparse.reduce_sum(sp, axis=[0], output_is_sparse=True), SparseTensor)
+    unord_sp = SparseTensor([[1, 0], [0, 1]], Tensor([2.0, 1.0]), [2, 2])
+    reord_sp = sparse.reorder(unord_sp)
+    assert reord_sp.indices == [[0, 1], [1, 0]]
+    assert sparse.reset_shape(sp, [4, 4]).shape == (4, 4)
+    assert sparse.reset_shape(sp).shape == (2, 2)
+    assert sparse.reshape(sp, [4, 1]).shape == (4, 1)
+    ret_sp = sparse.retain(sp, [True, False])
+    assert ret_sp.indices == [[0, 0]]
+    assert sparse.retain(sp, "bad").indices == []
+    seg_data = Tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    debugging.assert_near(
+        sparse.segment_sum(seg_data, [0, 1, 2], [0, 0, 2]), [[4.0, 6.0], [0.0, 0.0], [5.0, 6.0]]
+    )
+    debugging.assert_near(sparse.segment_mean(seg_data, [0, 1], [0, 0]), [[2.0, 3.0]])
+    debugging.assert_near(sparse.segment_sqrt_n(seg_data, [0], [0]), [[1.0, 2.0]])
+    assert sparse.segment_sum(seg_data, [], []).shape == (0, 2)
+    sl_sp = sparse.slice(sp, [0, 0], [1, 2])
+    assert sl_sp.indices == [[0, 0]] and sl_sp.shape == (1, 2)
+    sm_sp = sparse.softmax(sp)
+    debugging.assert_near(sm_sp.values, [1.0, 1.0])
+    ind_t = sparse.to_indicator(
+        SparseTensor([[0, 0], [1, 0]], Tensor([1, 2]), [2, 1]), vocab_size=3
+    )
+    debugging.assert_equal(ind_t, [[False, True, False], [False, False, True]])
+    tr_sp = sparse.transpose(SparseTensor([[0, 1]], Tensor([7.0]), [2, 3]))
+    assert tr_sp.indices == [[1, 0]] and tr_sp.shape == (3, 2)

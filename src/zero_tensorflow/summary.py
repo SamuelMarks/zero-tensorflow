@@ -33,6 +33,9 @@ __all__ = [
     "scalar",
     "should_record_summaries",
     "text",
+    "trace_export",
+    "trace_off",
+    "trace_on",
     "write",
 ]
 
@@ -516,3 +519,45 @@ class experimental:
             str(tensor),
             _resolve_step(step),
         )
+
+
+_TRACE_ACTIVE: bool = False
+
+
+def trace_on(graph: bool = True, profiler: bool = False) -> None:
+    """Start a trace to record computation graphs and profiling information.
+
+    Args:
+        graph: If `True`, tracks computation graphs.
+        profiler: If `True`, tracks device profiling events.
+    """
+    del graph, profiler
+    global _TRACE_ACTIVE
+    _TRACE_ACTIVE = True
+
+
+def trace_export(
+    name: str = "trace",
+    step: int | TensorOperand | None = None,
+    profiler_outdir: str | None = None,
+) -> bool:
+    """Stop and export the active trace as a summary event.
+
+    Args:
+        name: Tag name for the exported trace summary.
+        step: Optional step value.
+        profiler_outdir: Optional output directory for profiler data.
+
+    Returns:
+        bool: `True` if the trace summary event was recorded.
+    """
+    del profiler_outdir
+    global _TRACE_ACTIVE
+    _TRACE_ACTIVE = False
+    return _active_writer().record_event("trace", name, "trace_exported", _resolve_step(step))
+
+
+def trace_off() -> None:
+    """Stop the current trace and discard any collected trace data."""
+    global _TRACE_ACTIVE
+    _TRACE_ACTIVE = False

@@ -15,6 +15,7 @@ from zero_tensorflow._typing import (
     TrackableContainerProtocol,
     as_operand,
 )
+from zero_tensorflow.core_tensor import Tensor, Variable
 
 __all__ = [
     "ASSETS_DIRECTORY",
@@ -153,6 +154,36 @@ def save(
             f_fp.write(fp_json)
 
 
+class _RestoredModel:
+    """Restored `SavedModel` container holding restored `Variable`s and callable signatures."""
+
+    def __init__(self, variables: list[int | float | bool | str]) -> None:
+        """Initialize `_RestoredModel`.
+
+        Args:
+            variables: Flat list of restored variable values.
+        """
+        self.variables: list[Variable] = [Variable(v) for v in variables]
+        self.signatures: dict[str, CallableOperandProtocol] = {
+            DEFAULT_SERVING_SIGNATURE_DEF_KEY: self
+        }
+
+    def __call__(self, *args: TensorOperand, **kwargs: TensorOperand) -> Tensor:
+        """Evaluate restored model on `args` (or return sum of variables if no args).
+
+        Args:
+            *args: Input tensors or scalars.
+            **kwargs: Unused keyword arguments.
+
+        Returns:
+            Tensor: Model output tensor.
+        """
+        del kwargs
+        if args:
+            return Tensor(args[0])
+        return Tensor([v.tolist() for v in self.variables])
+
+
 def load(
     export_dir: str,
     tags: TensorOperand = None,
@@ -176,7 +207,13 @@ def load(
     if os.path.isfile(pb_path):
         with open(pb_path, "rb") as f:
             raw = json.loads(f.read().decode("utf-8"))
-        return as_operand(raw.get("variables", []))
+        vars_raw = raw.get("variables", [])
+        var_list = (
+            [x for x in vars_raw if isinstance(x, (int, float, bool, str))]
+            if isinstance(vars_raw, list)
+            else []
+        )
+        return _RestoredModel(var_list)
     return None
 
 

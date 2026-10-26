@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 
 import zero_tensorflow as tf
-from zero_tensorflow import RaggedTensor, SparseTensor, Tensor, Variable
+from zero_tensorflow import RaggedTensor, SparseTensor, Tensor, Variable, debugging
 from zero_tensorflow._typing import TensorOperand
 from zero_tensorflow.spec_types import _normalize_dims
 
@@ -55,6 +55,41 @@ def test_tensor_shape_and_specs() -> None:
     except ValueError:
         pass
     assert s2.concatenate([5]) == tf.TensorShape([2, 4, 5])
+    assert s2.is_fully_defined() is True
+    assert s1.is_fully_defined() is False
+    s2.assert_is_fully_defined()
+    try:
+        s1.assert_is_fully_defined()
+        raise AssertionError("Expected ValueError on partially defined shape")
+    except ValueError:
+        pass
+    s2.assert_has_rank(2)
+    try:
+        s2.assert_has_rank(3)
+        raise AssertionError("Expected ValueError on rank mismatch")
+    except ValueError:
+        pass
+    s1.assert_is_compatible_with(s2)
+    try:
+        s1.assert_is_compatible_with([3, 4])
+        raise AssertionError("Expected ValueError on incompatible shape")
+    except ValueError:
+        pass
+    assert s1.with_rank(2) == s1
+    assert s2.with_rank_at_least(1) == s2
+    try:
+        s2.with_rank_at_least(3)
+        raise AssertionError("Expected ValueError on rank < 3")
+    except ValueError:
+        pass
+    assert s2.with_rank_at_most(3) == s2
+    try:
+        s2.with_rank_at_most(1)
+        raise AssertionError("Expected ValueError on rank > 1")
+    except ValueError:
+        pass
+    assert s2.num_elements() == 8
+    assert s1.num_elements() is None
 
     base_spec = tf.TypeSpec()
     assert base_spec.value_type is Tensor
@@ -291,11 +326,36 @@ def test_graph_operation_device_and_module() -> None:
     root = _RootMod()
     assert len(root.variables) == 3
     assert len(root.trainable_variables) == 2
+    assert len(root.non_trainable_variables) == 1
     assert root.submodules == (root.child,)
 
 
 def test_raw_ops_and_namespace_stubs() -> None:
     """Verify all `tf.raw_ops` and namespace stub methods execute deterministically."""
+    x = Tensor([2.0, 4.0])
+    y = Tensor([1.0, 2.0])
+    debugging.assert_near(tf.raw_ops.Add(x, y), [3.0, 6.0])
+    debugging.assert_near(tf.raw_ops.Sub(x, y), [1.0, 2.0])
+    debugging.assert_near(tf.raw_ops.Mul(x, y), [2.0, 8.0])
+    debugging.assert_near(
+        tf.raw_ops.MatMul(Tensor([[1.0, 2.0], [3.0, 4.0]]), Tensor([[1.0, 0.0], [0.0, 1.0]])),
+        [[1.0, 2.0], [3.0, 4.0]],
+    )
+    debugging.assert_near(
+        tf.raw_ops.Conv2D(
+            tf.ones((1, 2, 2, 1)), tf.ones((2, 2, 1, 1)), strides=[1, 1, 1, 1], padding="VALID"
+        ),
+        [[[[4.0]]]],
+    )
+    debugging.assert_near(tf.raw_ops.Relu(Tensor([-2.0, 3.0])), [0.0, 3.0])
+    debugging.assert_near(tf.raw_ops.Softmax(Tensor([1.0, 1.0])), [0.5, 0.5])
+    debugging.assert_equal(tf.raw_ops.GatherV2(Tensor([10, 20, 30]), Tensor([2, 0])), [30, 10])
+    debugging.assert_equal(
+        tf.raw_ops.StridedSlice(Tensor([10, 20, 30, 40]), [0], [4], [2]),
+        [10, 30],
+    )
+    debugging.assert_near(tf.raw_ops.Where(Tensor([True, False]), x, y), [2.0, 2.0])
+
     for name, member in inspect.getmembers(tf.raw_ops):
         if not name.startswith("_") and callable(member):
             member()

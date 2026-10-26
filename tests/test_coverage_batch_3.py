@@ -204,6 +204,9 @@ def test_data_stubs(tmp_path: Path) -> None:
         Args:
             x: Input dataset element.
 
+        Returns:
+            tf.data.DatasetElement: Never returns.
+
         Raises:
             ValueError: Always raised.
         """
@@ -283,3 +286,9 @@ def test_data_stubs(tmp_path: Path) -> None:
 
     assert list(tf.data.Dataset.from_tensor_slices(None)) == []
     assert list(tf.data.Dataset.from_tensor_slices("ab")) == ["a", "b"]
+    assert list(tf.data.Dataset.from_tensor_slices({"a": [1, 2], "b": 10})) == [{"a": 1, "b": 10}]
+    assert list(tf.data.Dataset.from_tensor_slices(([1, 2], [3, 4]))) == [[1, 3], [2, 4]]
+    ds_rep_inf = tf.data.Dataset.from_tensor_slices([1, 2]).repeat(None)
+    assert ds_rep_inf.cardinality() == tf.data.INFINITE_CARDINALITY
+    ds_rep_fin = tf.data.Dataset.from_tensor_slices([1, 2]).repeat(3)
+    assert ds_rep_fin.cardinality() == 6
