@@ -2788,8 +2788,8 @@ class _TFLiteConverterImpl(dict[str, TensorOperand]):
         self.optimizations: list[str] = []
         self.target_spec: dict[str, TensorOperand] = {}
         self.representative_dataset: TensorOperand = None
-        self._input_shapes = input_shapes or [(1,)]
-        self._input_dtypes = input_dtypes or ["float32"]
+        self._input_shapes: list[builtins.tuple[int, ...]] = input_shapes or [(1,)]
+        self._input_dtypes: list[str] = input_dtypes or ["float32"]
 
     @classmethod
     def from_concrete_functions(
@@ -2815,8 +2815,12 @@ class _TFLiteConverterImpl(dict[str, TensorOperand]):
         fn_item = funcs[0] if funcs else None
         callable_fn = fn_item if callable(fn_item) else None
         fn_inputs = getattr_free_inputs(callable_fn) if callable_fn is not None else []
-        shapes = [t.shape if t.shape else (1,) for t in fn_inputs] if fn_inputs else [(1,)]
-        dtypes = [to_dtype(t.dtype).value for t in fn_inputs] if fn_inputs else ["float32"]
+        shapes: list[builtins.tuple[int, ...]] = (
+            [t.shape if t.shape else (1,) for t in fn_inputs] if fn_inputs else [(1,)]
+        )
+        dtypes: list[str] = (
+            [to_dtype(t.dtype).value for t in fn_inputs] if fn_inputs else ["float32"]
+        )
         return cls(
             callable_fn=callable_fn,
             input_shapes=shapes,

@@ -2685,13 +2685,37 @@ class linalg:
         """
         del name
         t_in = Tensor(input)
+
+        def _expm_2d(mat_2d: Tensor) -> Tensor:
+            """Compute the matrix exponential of a 2-D matrix via scaling-and-squaring Horner Taylor series.
+
+            Args:
+                mat_2d: 2-D square matrix `Tensor`.
+
+            Returns:
+                Tensor: 2-D matrix exponential `Tensor`.
+            """
+            t_a = _to_tensor(mat_2d)
+            m = mat_2d.shape[-1]
+            eye_m = _ops.eye(m, m, dtype=t_a.dtype)
+            scaled = _ops.multiply(t_a, _to_tensor(1.0 / 16.0, dtype=t_a.dtype))
+            acc = eye_m
+            for k in range(12, 0, -1):
+                step = _ops.multiply(
+                    _ops.matmul(scaled, acc),
+                    _to_tensor(1.0 / float(k), dtype=t_a.dtype),
+                )
+                acc = _ops.add(eye_m, step)
+            for _ in range(4):
+                acc = _ops.matmul(acc, acc)
+            return _wrap_tensor(acc)
+
         if _tracer.is_tracing or len(t_in.shape) <= 2:
-            return _wrap_tensor(as_operand(_msc_ops.expm(_to_tensor(t_in))))
+            return _expm_2d(t_in)
         batch_shape = t_in.shape[:-2]
         inner_shape = t_in.shape[-2:]
         slices = [
-            _wrap_tensor(as_operand(_msc_ops.expm(_to_tensor(_slice_batch_matrix(t_in, idx)))))
-            for idx in _iter_batch_indices(batch_shape)
+            _expm_2d(_slice_batch_matrix(t_in, idx)) for idx in _iter_batch_indices(batch_shape)
         ]
         return _stack_batch_results(slices, batch_shape, inner_shape, t_in.dtype)
 

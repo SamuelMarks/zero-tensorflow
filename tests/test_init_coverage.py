@@ -1414,6 +1414,11 @@ def test_math_ops_behavioral() -> None:
     debugging.assert_near(
         tf.math.lbeta(Tensor([[2.0, 3.0], [1.0, 1.0]])), [-2.4849066, 0.0], atol=1e-5
     )
+    debugging.assert_near(
+        tf.math.betainc(Tensor([2.0]), Tensor([1.5]), Tensor([0.5])),
+        [0.38128157],
+        atol=1e-4,
+    )
     debugging.assert_near(tf.math.ndtri(Tensor([0.5, 0.84134475])), [0.0, 1.0], atol=1e-5)
     debugging.assert_equal(tf.range(4), [0, 1, 2, 3])
 

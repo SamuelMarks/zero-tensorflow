@@ -645,7 +645,7 @@ def test_scripts_check_api_parity(tmp_path: Path) -> None:
     )
     todo_plan_tmp = tmp_path / "todo_tmp.md"
     todo_plan_tmp.write_text(
-        "- [ ] `tf.ExemptItem` (`class`)\n- [ ] no_backticks\n", encoding="utf-8"
+        "# Header\n- [ ] `tf.ExemptItem` (`class`)\n- [ ] no_backticks\n", encoding="utf-8"
     )
     _, total_c, viols = check_api_parity.check_v005_minimum_compliance(
         _FakeTargetMod,

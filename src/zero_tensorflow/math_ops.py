@@ -6,7 +6,7 @@ import builtins
 import itertools
 import math as _py_math
 import struct
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from zero_tensorflow._typing import (
     DTypeLike,
@@ -256,15 +256,252 @@ def _scalar_spence(x: float) -> float:
     return s_z
 
 
+def _scalar_fresnel_cos(x: float) -> float:
+    """Compute the Fresnel cosine integral `C(x)` for a scalar float.
+
+    Args:
+        x: Real input scalar.
+
+    Returns:
+        float: Evaluated Fresnel cosine integral value.
+    """
+    return _scalar_fresnel(x)[0]
+
+
+def _scalar_fresnel_sin(x: float) -> float:
+    """Compute the Fresnel sine integral `S(x)` for a scalar float.
+
+    Args:
+        x: Real input scalar.
+
+    Returns:
+        float: Evaluated Fresnel sine integral value.
+    """
+    return _scalar_fresnel(x)[1]
+
+
+def _scalar_bessel_i0(x: float) -> float:
+    """Compute the modified Bessel function of the first kind `I_0(x)` for a scalar float.
+
+    Args:
+        x: Real input scalar.
+
+    Returns:
+        float: Evaluated `I_0(x)` value.
+    """
+    q = 0.25 * x * x
+    term = 1.0
+    total = 1.0
+    for k in builtins.range(1, 30):
+        term *= q / float(k * k)
+        total += term
+    return total
+
+
+def _scalar_bessel_i0e(x: float) -> float:
+    """Compute the exponentially scaled modified Bessel function `exp(-|x|) * I_0(x)`.
+
+    Args:
+        x: Real input scalar.
+
+    Returns:
+        float: Evaluated `I_0e(x)` value.
+    """
+    return _py_math.exp(-builtins.abs(x)) * _scalar_bessel_i0(x)
+
+
+def _scalar_bessel_i1(x: float) -> float:
+    """Compute the modified Bessel function of the first kind `I_1(x)` for a scalar float.
+
+    Args:
+        x: Real input scalar.
+
+    Returns:
+        float: Evaluated `I_1(x)` value.
+    """
+    q = 0.25 * x * x
+    term = 0.5 * x
+    total = term
+    for k in builtins.range(1, 30):
+        term *= q / float(k * (k + 1))
+        total += term
+    return total
+
+
+def _scalar_bessel_i1e(x: float) -> float:
+    """Compute the exponentially scaled modified Bessel function `exp(-|x|) * I_1(x)`.
+
+    Args:
+        x: Real input scalar.
+
+    Returns:
+        float: Evaluated `I_1e(x)` value.
+    """
+    return _py_math.exp(-builtins.abs(x)) * _scalar_bessel_i1(x)
+
+
+def _scalar_digamma(x: float) -> float:
+    """Compute the digamma function `psi(x) = d/dx ln(Gamma(x))` for a scalar float.
+
+    Args:
+        x: Real input scalar.
+
+    Returns:
+        float: Evaluated digamma value.
+    """
+    z = x
+    shift = 0.0
+    for _ in builtins.range(8):
+        shift -= 1.0 / z
+        z += 1.0
+    inv_z2 = 1.0 / (z * z)
+    asymp = (
+        _py_math.log(z) - 0.5 / z - inv_z2 * (1.0 / 12.0 - inv_z2 * (1.0 / 120.0 - inv_z2 / 252.0))
+    )
+    return shift + asymp
+
+
+def _scalar_erfinv(y: float) -> float:
+    """Compute the inverse error function `erfinv(y)` via Winitzki approximation + Newton-Raphson.
+
+    Args:
+        y: Real input scalar in `(-1, 1)`.
+
+    Returns:
+        float: Evaluated `erfinv(y)` value.
+    """
+    yc = builtins.max(-0.999999999999999, builtins.min(0.999999999999999, y))
+    a = 0.147
+    ln_term = _py_math.log(1.0 - yc * yc)
+    t = 2.0 / (_py_math.pi * a) + 0.5 * ln_term
+    x = _py_math.copysign(
+        _py_math.sqrt(builtins.max(0.0, _py_math.sqrt(t * t - ln_term / a) - t)),
+        yc,
+    )
+    two_over_sqrt_pi = 2.0 / _py_math.sqrt(_py_math.pi)
+    for _ in builtins.range(3):
+        x -= (_py_math.erf(x) - yc) / (two_over_sqrt_pi * _py_math.exp(-x * x))
+    return x
+
+
+def _scalar_igamma(a: float, x: float) -> float:
+    """Compute the lower regularized incomplete gamma function `P(a, x)`.
+
+    Args:
+        a: Positive shape parameter.
+        x: Non-negative upper integration limit.
+
+    Returns:
+        float: Evaluated `P(a, x)` value in `[0, 1]`.
+    """
+    xp = builtins.max(1e-30, x)
+    term = 1.0 / a
+    total = term
+    for k in builtins.range(1, 60):
+        term *= xp / (a + float(k))
+        total += term
+    log_pref = a * _py_math.log(xp) - xp - _py_math.lgamma(a)
+    return builtins.min(1.0, builtins.max(0.0, _py_math.exp(log_pref) * total))
+
+
+def _scalar_igammac(a: float, x: float) -> float:
+    """Compute the upper regularized incomplete gamma function `Q(a, x) = 1 - P(a, x)`.
+
+    Args:
+        a: Positive shape parameter.
+        x: Non-negative lower integration limit.
+
+    Returns:
+        float: Evaluated `Q(a, x)` value in `[0, 1]`.
+    """
+    return 1.0 - _scalar_igamma(a, x)
+
+
+def _scalar_zeta(x: float, q: float) -> float:
+    """Compute the Hurwitz zeta function `zeta(x, q)` via Euler-Maclaurin summation.
+
+    Args:
+        x: Exponent parameter `s > 1`.
+        q: Shift parameter `q > 0`.
+
+    Returns:
+        float: Evaluated Hurwitz zeta value.
+    """
+    s = builtins.max(1.000001, x)
+    acc = 0.0
+    for k in builtins.range(8):
+        acc += (q + float(k)) ** (-s)
+    qn = q + 8.0
+    acc += (qn ** (1.0 - s)) / (s - 1.0)
+    acc += 0.5 * (qn ** (-s))
+    acc += (s / 12.0) * (qn ** (-s - 1.0))
+    acc -= (s * (s + 1.0) * (s + 2.0) / 720.0) * (qn ** (-s - 3.0))
+    return acc
+
+
+def _scalar_polygamma(n: float, x: float) -> float:
+    """Compute the polygamma function `psi^(n)(x)` for order `n` and argument `x > 0`.
+
+    Args:
+        n: Derivative order `n`.
+        x: Positive argument `x`.
+
+    Returns:
+        float: Evaluated polygamma value.
+    """
+    m = builtins.max(1, int(builtins.round(n)))
+    return ((-1.0) ** (m + 1)) * _py_math.gamma(float(m) + 1.0) * _scalar_zeta(float(m) + 1.0, x)
+
+
+def _scalar_betainc(a: float, b: float, x: float) -> float:
+    """Compute the regularized incomplete beta integral `I_x(a, b)`.
+
+    Args:
+        a: First positive shape parameter.
+        b: Second positive shape parameter.
+        x: Upper integration limit in `[0, 1]`.
+
+    Returns:
+        float: Evaluated regularized incomplete beta value in `[0, 1]`.
+    """
+    xp = builtins.max(1e-30, builtins.min(1.0 - 1e-15, x))
+    c_k = 1.0
+    xk = 1.0
+    total = 1.0 / a
+    for k in builtins.range(1, 60):
+        c_k *= (float(k) - b) / float(k)
+        xk *= xp
+        total += c_k * xk / (a + float(k))
+    log_beta = _py_math.lgamma(a) + _py_math.lgamma(b) - _py_math.lgamma(a + b)
+    return builtins.min(
+        1.0, builtins.max(0.0, _py_math.exp(a * _py_math.log(xp) - log_beta) * total)
+    )
+
+
+_SCALAR_UNARY_DISPATCH: dict[str, Callable[[float], float]] = {
+    "bessel_i0": _scalar_bessel_i0,
+    "bessel_i0e": _scalar_bessel_i0e,
+    "bessel_i1": _scalar_bessel_i1,
+    "bessel_i1e": _scalar_bessel_i1e,
+    "dawsn": _scalar_dawsn,
+    "digamma": _scalar_digamma,
+    "erfinv": _scalar_erfinv,
+    "fresnel_cos": _scalar_fresnel_cos,
+    "fresnel_sin": _scalar_fresnel_sin,
+    "lgamma": _py_math.lgamma,
+    "spence": _scalar_spence,
+}
+
+
 def _apply_scalar_fn(
     x: TensorCompatible | TensorOperand,
     fn_mode: str,
 ) -> Tensor:
-    """Apply a scalar special function (`dawsn`, `fresnel_cos`, `fresnel_sin`, `spence`, `lgamma`) across an N-D tensor.
+    """Apply a registered unary scalar special function across an N-D tensor.
 
     Args:
         x: Input tensor or tensor-compatible value.
-        fn_mode: Function identifier string.
+        fn_mode: Function identifier string in `_SCALAR_UNARY_DISPATCH`.
 
     Returns:
         Tensor: Output tensor with identical shape and floating-point dtype.
@@ -274,21 +511,35 @@ def _apply_scalar_fn(
     if not out_dt.is_floating:
         out_dt = DType.Float32
     vals = _flatten_floats(_to_py_data(t_x))
-    mapped: builtins.list[float] = []
-    for v in vals:
-        if fn_mode == "dawsn":
-            mapped.append(_scalar_dawsn(v))
-        elif fn_mode == "fresnel_cos":
-            mapped.append(_scalar_fresnel(v)[0])
-        elif fn_mode == "fresnel_sin":
-            mapped.append(_scalar_fresnel(v)[1])
-        elif fn_mode == "spence":
-            mapped.append(_scalar_spence(v))
-        else:
-            mapped.append(_py_math.lgamma(v))
+    fn = _SCALAR_UNARY_DISPATCH[fn_mode]
+    mapped = [fn(v) for v in vals]
     if not t_x.shape:
         return Tensor(mapped[0] if mapped else 0.0, dtype=out_dt)
     return _wrap_tensor(_k_ops.reshape(_to_tensor(mapped, dtype=out_dt), t_x.shape))
+
+
+def _apply_binary_scalar_fn(
+    a: TensorCompatible | TensorOperand,
+    b: TensorCompatible | TensorOperand,
+    fn: Callable[[float, float], float],
+) -> Tensor:
+    """Apply a binary scalar special function elementwise across two tensors.
+
+    Args:
+        a: First input tensor or tensor-compatible value.
+        b: Second input tensor or tensor-compatible value.
+        fn: Binary scalar callable `(float, float) -> float`.
+
+    Returns:
+        Tensor: Output tensor with matching shape and floating-point dtype.
+    """
+    t_a = _to_tensor(1.0 if a is None else a)
+    t_b = _to_tensor(1.0 if b is None else b)
+    out_dt = to_dtype(t_a.dtype)
+    vals_a = _flatten_floats(_to_py_data(t_a))
+    vals_b = _flatten_floats(_to_py_data(t_b))
+    mapped = [fn(va, vb) for va, vb in zip(vals_a, vals_b)]
+    return _wrap_tensor(_k_ops.reshape(_to_tensor(mapped, dtype=out_dt), t_a.shape))
 
 
 def _cumulative_nd(
@@ -594,7 +845,7 @@ class math:
             Tensor: Operation result.
         """
         del name
-        return _wrap_tensor(_ops.bessel_i0(_to_tensor(x)))
+        return _apply_scalar_fn(x, "bessel_i0")
 
     @staticmethod
     def bessel_i0e(
@@ -611,7 +862,7 @@ class math:
             Tensor: Operation result.
         """
         del name
-        return _wrap_tensor(_ops.bessel_i0e(_to_tensor(x)))
+        return _apply_scalar_fn(x, "bessel_i0e")
 
     @staticmethod
     def bessel_i1(
@@ -628,7 +879,7 @@ class math:
             Tensor: Operation result.
         """
         del name
-        return _wrap_tensor(_ops.bessel_i1(_to_tensor(x)))
+        return _apply_scalar_fn(x, "bessel_i1")
 
     @staticmethod
     def bessel_i1e(
@@ -645,7 +896,7 @@ class math:
             Tensor: Operation result.
         """
         del name
-        return _wrap_tensor(_ops.bessel_i1e(_to_tensor(x)))
+        return _apply_scalar_fn(x, "bessel_i1e")
 
     @staticmethod
     def ceil(
@@ -730,7 +981,7 @@ class math:
             Tensor: Operation result.
         """
         del name
-        return _wrap_tensor(_ops.digamma(_to_tensor(x)))
+        return _apply_scalar_fn(x, "digamma")
 
     @staticmethod
     def erf(
@@ -781,7 +1032,7 @@ class math:
             Tensor: Operation result.
         """
         del name
-        return _wrap_tensor(_ops.erfinv(_to_tensor(x)))
+        return _apply_scalar_fn(x, "erfinv")
 
     @staticmethod
     def exp(
@@ -1876,7 +2127,7 @@ class math:
             Tensor: Operation result.
         """
         del name
-        return _wrap_tensor(_ops.igamma(_to_tensor(a), _to_tensor(x)))
+        return _apply_binary_scalar_fn(a, x, _scalar_igamma)
 
     @staticmethod
     def igammac(
@@ -1895,7 +2146,7 @@ class math:
             Tensor: Operation result.
         """
         del name
-        return _wrap_tensor(_ops.igammac(_to_tensor(a), _to_tensor(x)))
+        return _apply_binary_scalar_fn(a, x, _scalar_igammac)
 
     @staticmethod
     def polygamma(
@@ -1914,7 +2165,7 @@ class math:
             Tensor: Operation result.
         """
         del name
-        return _wrap_tensor(_ops.polygamma(_to_tensor(a), _to_tensor(x)))
+        return _apply_binary_scalar_fn(a, x, _scalar_polygamma)
 
     @staticmethod
     def zeta(
@@ -1933,7 +2184,7 @@ class math:
             Tensor: Operation result.
         """
         del name
-        return _wrap_tensor(as_operand(_ops.zeta(_to_tensor(x), _to_tensor(q))))
+        return _apply_binary_scalar_fn(x, q, _scalar_zeta)
 
     @staticmethod
     def scalar_mul(
@@ -2440,7 +2691,17 @@ class math:
             Tensor: Regularized incomplete beta values.
         """
         del name
-        return _wrap_tensor(_ops.betainc(_to_tensor(a), _to_tensor(b), _to_tensor(x)))
+        t_a = _to_tensor(1.0 if a is None else a)
+        t_b = _to_tensor(1.0 if b is None else b)
+        t_x = _to_tensor(0.5 if x is None else x)
+        if _tracer.is_tracing:
+            return _wrap_tensor(_ops.betainc(t_a, t_b, t_x))
+        out_dt = to_dtype(t_x.dtype)
+        vals_a = _flatten_floats(_to_py_data(t_a))
+        vals_b = _flatten_floats(_to_py_data(t_b))
+        vals_x = _flatten_floats(_to_py_data(t_x))
+        mapped = [_scalar_betainc(va, vb, vx) for va, vb, vx in zip(vals_a, vals_b, vals_x)]
+        return _wrap_tensor(_k_ops.reshape(_to_tensor(mapped, dtype=out_dt), t_x.shape))
 
     @staticmethod
     def bincount(
@@ -2682,7 +2943,7 @@ class math:
         t_x = _to_tensor(0.5 if x is None else x)
         if _tracer.is_tracing:
             return _wrap_tensor(_ops.erfcinv(t_x))
-        return _wrap_tensor(_ops.erfinv(_ops.subtract(_to_tensor(1.0, dtype=t_x.dtype), t_x)))
+        return math.erfinv(_ops.subtract(_to_tensor(1.0, dtype=t_x.dtype), t_x))
 
     @staticmethod
     def fresnel_cos(
@@ -2924,7 +3185,10 @@ class math:
         one = _to_tensor(1.0, dtype=t_x.dtype)
         sqrt2 = _to_tensor(_py_math.sqrt(2.0), dtype=t_x.dtype)
         return _wrap_tensor(
-            _ops.multiply(sqrt2, _ops.erfinv(_ops.subtract(_ops.multiply(two, t_x), one)))
+            _ops.multiply(
+                sqrt2,
+                _to_tensor(math.erfinv(_ops.subtract(_ops.multiply(two, t_x), one))),
+            )
         )
 
     @staticmethod
